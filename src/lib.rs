@@ -20,39 +20,31 @@ impl<T: Any> AsAny for T {
     }
 }
 
-pub trait Message: AsAny + Debug + Send + Sync + 'static {}
+pub trait Message: AsAny + Debug + Send + Sync + 'static {
+    type Response: Send;
+}
 
 #[async_trait]
-pub trait Actor: AsAny + Default + Send + 'static {
-    type Message: Message;
-    async fn handle_message(&mut self, ox: OxFrame, msg: &Self::Message);
+pub trait Actor: AsAny + Default + Clone + Send + Sync + 'static {
+    type Msg: Message;
+    async fn handle_message(&mut self, ox: OxFrame, msg: &Self::Msg);
     // async fn handle_message(&mut self, ox: OxFrame, msg: &Self::Message) -> Box<dyn Any>;
     fn create_instance_factory(&self) -> Arc<dyn Fn() -> Box<dyn Any> + Send + Sync> {
         Arc::new(|| Box::<Self>::default())
     }
 }
 
-pub trait Routing {
-    fn match_actors(&self, msg_id: TypeId) -> Option<Vec<ActorInstance>>;
-    fn get_actor<A: Actor>(&self) -> Option<ActorInstance>;
-    fn get_actor_by_id(&self, id: &TypeId) -> Option<ActorInstance>;
-}
-
+#[async_trait]
 pub trait Dispatcher {
-    fn send<A>(&self, msg: A::Message)
+    async fn send<A>(&self, msg: A::Msg) -> Result<(), OxFrameError>
     where
-        A: Actor,
-        A::Message: Message + Clone;
+        A: Actor + Dispatcher;
 
-    fn ask<A, R>(&self, msg: A::Message)
-    where
-        A: Actor,
-        A::Message: Message + Clone,
-        R: Send;
-
-    fn broadcast<M>(&self, msg: M)
-    where
-        M: Message + Clone;
+    // async fn ask<A, R>(&self, msg: A::Msg) ->
+    // where
+    //     A: Actor,
+    //     A::Msg: Message + Clone,
+    //     R: Send;
 }
 
 #[async_trait]
@@ -76,23 +68,30 @@ pub trait Context {
         F: FnOnce(&mut T) -> R + Send;
 }
 
-struct ActorHandle {
-    rx: tokio::sync::mpsc::UnboundedReceiver<Box<dyn Message>>,
+struct ActorHandle<A>
+where
+    A: Actor,
+{
+    rx: tokio::sync::mpsc::Receiver<
+        Box<dyn Message<Response = <<A as Actor>::Msg as Message>::Response> + Send>,
+    >,
     stop_signal_rx: tokio::sync::mpsc::Receiver<()>,
 }
 
-async fn run_actor_loop<M: Message>(
-    mut handle: ActorHandle,
-    mut actor: impl Actor<Message = M>,
+async fn run_actor_loop<A>(
+    mut handle: ActorHandle<A>,
+    mut actor: impl Actor<Msg = A::Msg>,
     ox: OxFrame,
-) {
+) where
+    A: Actor,
+{
     loop {
         tokio::select! {
             _ = handle.stop_signal_rx.recv() => {
                 return;
             }
             Some(msg) = handle.rx.recv() => {
-                match (*msg).as_any().downcast_ref::<M>() {
+                match (*msg).as_any().downcast_ref::<A::Msg>() {
                     Some(msg) => {
                         actor.handle_message(ox.clone(), msg).await;
                     }
@@ -106,14 +105,22 @@ async fn run_actor_loop<M: Message>(
 }
 
 #[derive(Clone)]
-pub struct ActorInstance {
+pub struct ActorInstance<A>
+where
+    A: Actor,
+{
     id: TypeId,
     factory: Arc<dyn Fn() -> Box<dyn Any> + Send + Sync>,
-    tx: tokio::sync::mpsc::UnboundedSender<Box<dyn Message>>,
+    tx: tokio::sync::mpsc::Sender<
+        Box<dyn Message<Response = <<A as Actor>::Msg as Message>::Response> + Send>,
+    >,
     stop_signal_tx: tokio::sync::mpsc::Sender<()>,
 }
 
-impl std::fmt::Debug for ActorInstance {
+impl<A> std::fmt::Debug for ActorInstance<A>
+where
+    A: Actor,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ActorInstance")
             .field("id", &self.id)
@@ -124,29 +131,48 @@ impl std::fmt::Debug for ActorInstance {
     }
 }
 
-impl ActorInstance {
-    fn send<M>(&self, msg: M)
+#[async_trait]
+impl<A> Dispatcher for ActorInstance<A>
+where
+    A: Actor,
+{
+    async fn send<T>(&self, msg: T::Msg) -> Result<(), OxFrameError>
     where
-        M: Message,
+        T: Actor + Dispatcher,
     {
-        let msg = Box::new(msg) as Box<dyn Message>;
-
-        self.tx
-            .send(msg)
-            .map_err(|_| OxFrameError::SendError)
-            .unwrap();
-    }
-
-    pub fn stop(&self) {
-        self.stop_signal_tx.try_send(()).unwrap();
+        (&self).send::<T>(msg).await
     }
 }
 
-fn create_actor<A: Actor>(actor: &A) -> (ActorHandle, ActorInstance) {
+#[async_trait]
+impl<T: Actor> Dispatcher for &ActorInstance<T> {
+    async fn send<A>(&self, msg: A::Msg) -> Result<(), OxFrameError>
+    where
+        A: Actor,
+        A::Msg: Message<Response = <A::Msg as Message>::Response> + Send + 'static, // Dodano ograniczenie tutaj
+    {
+        // Zrzutowano msg na oczekiwany typ
+        let msg =
+            Box::new(msg) as Box<dyn Message<Response = <A::Msg as Message>::Response> + Send>;
+
+        if self.tx.send(msg).await.is_err() {
+            Err(OxFrameError::SendError)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn create_actor<A>(actor: &A) -> (ActorHandle<A>, ActorInstance<A>)
+where
+    A: Actor,
+{
     let actor_id = TypeId::of::<A>();
 
     let factory = actor.create_instance_factory();
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Message>>();
+    let (tx, rx) = tokio::sync::mpsc::channel::<
+        Box<dyn Message<Response = <<A as Actor>::Msg as Message>::Response> + Send>,
+    >(16);
     let (stop_signal_tx, stop_signal_rx) = tokio::sync::mpsc::channel::<()>(1);
     let handler = ActorHandle { rx, stop_signal_rx };
     let instance = ActorInstance {
@@ -165,83 +191,8 @@ pub struct OxFrame {
 
 #[derive(Default)]
 struct OxFrameInner {
-    routing_table: OxRoutingTable,
+    actors: RwLock<anymap::Map<dyn Any + Send + Sync>>,
     context: DashMap<TypeId, Box<dyn Any + Send + Sync>>,
-}
-
-#[derive(Default)]
-struct OxRoutingTable {
-    actors: RwLock<HashMap<TypeId, ActorInstance>>,
-    // relationships between <message and actors>
-    messages: RwLock<HashMap<TypeId, Vec<TypeId>>>,
-}
-
-impl OxRoutingTable {
-    fn register_actor(&self, instance: ActorInstance, actor_id: TypeId, msg_id: TypeId) {
-        let mut actors_write_guard = self.actors.write().unwrap();
-        actors_write_guard.insert(actor_id, instance);
-
-        let mut messages_write_guard = self.messages.write().unwrap();
-        messages_write_guard
-            .entry(msg_id)
-            .or_default()
-            .push(actor_id);
-    }
-}
-
-impl Routing for OxRoutingTable {
-    fn match_actors(&self, msg_id: TypeId) -> Option<Vec<ActorInstance>> {
-        let actors_read_guard = self.actors.read().unwrap();
-        let messages_read_guard = self.messages.read().unwrap();
-        messages_read_guard.get(&msg_id).map(|actor_ids| {
-            actor_ids
-                .iter()
-                .filter_map(|actor_id| actors_read_guard.get(actor_id))
-                .cloned()
-                .collect::<Vec<_>>()
-        })
-    }
-
-    fn get_actor<A: Actor>(&self) -> Option<ActorInstance> {
-        self.get_actor_by_id(&TypeId::of::<A>())
-    }
-
-    fn get_actor_by_id(&self, id: &TypeId) -> Option<ActorInstance> {
-        self.actors.read().unwrap().get(id).cloned()
-    }
-}
-
-impl Dispatcher for OxRoutingTable {
-    fn send<A>(&self, msg: A::Message)
-    where
-        A: Actor,
-        A::Message: Message + Clone,
-    {
-        if let Some(actor) = self.get_actor::<A>() {
-            actor.send(msg);
-        }
-    }
-
-    fn ask<A, R>(&self, msg: A::Message)
-    where
-        A: Actor,
-        A::Message: Message + Clone,
-    {
-        if let Some(actor) = self.get_actor::<A>() {
-            actor.send(msg);
-        }
-    }
-
-    fn broadcast<M>(&self, msg: M)
-    where
-        M: Message + Clone,
-    {
-        if let Some(actors) = self.match_actors(TypeId::of::<M>()) {
-            for actor in actors {
-                actor.send(msg.clone());
-            }
-        }
-    }
 }
 
 #[derive(Error, Debug)]
@@ -260,42 +211,17 @@ pub enum OxFrameError {
     ReceiveError,
 }
 
-impl Routing for OxFrame {
-    fn match_actors(&self, msg_id: TypeId) -> Option<Vec<ActorInstance>> {
-        self.inner.routing_table.match_actors(msg_id)
-    }
-
-    fn get_actor<A: Actor>(&self) -> Option<ActorInstance> {
-        self.inner.routing_table.get_actor::<A>()
-    }
-
-    fn get_actor_by_id(&self, id: &TypeId) -> Option<ActorInstance> {
-        self.inner.routing_table.get_actor_by_id(id)
-    }
-}
-
+#[async_trait]
 impl Dispatcher for OxFrame {
-    fn send<A>(&self, msg: A::Message)
+    async fn send<A>(&self, msg: A::Msg) -> Result<(), OxFrameError>
     where
-        A: Actor,
-        A::Message: Message + Clone,
+        A: Actor + Dispatcher,
     {
-        self.inner.routing_table.send::<A>(msg);
-    }
-
-    fn ask<A, R>(&self, msg: A::Message)
-    where
-        A: Actor,
-        A::Message: Message + Clone,
-    {
-        self.inner.routing_table.send::<A>(msg);
-    }
-
-    fn broadcast<M>(&self, msg: M)
-    where
-        M: Message + Clone,
-    {
-        self.inner.routing_table.broadcast(msg)
+        if let Some(actor) = self.get_actor::<A>() {
+            actor.send(msg).await
+        } else {
+            Err(OxFrameError::ActorNotExists(type_name::<A>().to_string()))
+        }
     }
 }
 
@@ -304,25 +230,19 @@ impl OxFrame {
         Default::default()
     }
 
+    pub fn get_actor<A: Actor>(&self) -> Option<A> {
+        self.inner.actors.read().unwrap().get::<A>().cloned()
+    }
+
     pub fn spawn<A: Actor>(&self, actor: A) -> Result<(), OxFrameError> {
-        let actor_id = TypeId::of::<A>();
-        if self
-            .inner
-            .routing_table
-            .get_actor_by_id(&actor_id)
-            .is_some()
-        {
+        if self.get_actor::<A>().is_some() {
             Err(OxFrameError::ActorAlreadySpawned(
-                type_name::<A::Message>().to_string(),
+                type_name::<A::Msg>().to_string(),
             ))
         } else {
-            let msg_id = TypeId::of::<A::Message>();
             let (handle, instance) = create_actor(&actor);
-            dbg!(&msg_id, &actor_id);
-            self.inner
-                .routing_table
-                .register_actor(instance, actor_id, msg_id);
             tokio::spawn(run_actor_loop(handle, actor, self.clone()));
+            self.inner.actors.write().unwrap().insert(instance);
             Ok(())
         }
     }
@@ -447,7 +367,9 @@ mod tests {
             i: i32,
         }
 
-        impl Message for TestMessage {}
+        impl Message for TestMessage {
+            type Response = ();
+        }
 
         #[derive(Debug, Default, Clone)]
         pub struct TestActor {
@@ -456,11 +378,11 @@ mod tests {
 
         #[async_trait]
         impl Actor for TestActor {
-            type Message = TestMessage;
+            type Msg = TestMessage;
             async fn handle_message(&mut self, ox: OxFrame, msg: &TestMessage) {
                 ox.with_context(|i: &i32| println!("ii: {}", i));
                 ox.with_context_mut(|i: &mut i32| *i += 1);
-                ox.send::<TestActor>(TestMessage { i: self.i });
+                ox.send(TestMessage { i: self.i });
             }
         }
 
