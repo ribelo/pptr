@@ -1,0 +1,25 @@
+[package]
+name = "minions"
+version = "0.1.0"
+edition = "2021"
+
+[[bench]]
+name = "self_call"
+harness = false
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+minions-derive = { path = "../minions-derive" }
+ahash = "0.8"
+async-trait = "0.1"
+hashbrown = "0.14"
+strum = { version = "0.25", features = ["derive"] }
+thiserror = "1.0"
+tokio = { version = "1.32", features = ["full"] }
+tracing = "0.1"
+typed-builder = "0.16"
+chrono = "0.4.31"
+
+[dev-dependencies]
+criterion = "0.5"
