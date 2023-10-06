@@ -65,7 +65,7 @@ pub fn expand(ast: &DeriveInput) -> TokenStream {
     };
 
     let gen = quote! {
-        impl Messageable for #name {
+        impl Message for #name {
             type Response = #response_type;
         }
     };
