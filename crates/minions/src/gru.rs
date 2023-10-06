@@ -4,119 +4,157 @@ use std::{
     sync::{Arc, RwLock},
 };
 
+const GRU: Gru = Gru::new();
+
 use async_trait::async_trait;
-use minions_derive::minion;
 use thiserror::Error;
+use tokio::sync::mpsc;
 
-use crate::{
-    context::Context,
-    dispatcher::Dispatcher,
-    message::{MessageError, Messageable},
-    minion::{self, Address, Minion, MinionInstance, SpawnableActor},
-};
+use crate::message::{Messageable, Packet};
 
-#[derive(Debug, Error)]
-pub enum GruError {
-    #[error("Actor already exists: {0}")]
-    ActorAlreadyExists(String),
-}
-
-impl GruError {
-    pub fn actor_already_exists<A>() -> Self
-    where
-        A: Minion,
-    {
-        Self::ActorAlreadyExists(type_name::<A>().to_string())
-    }
-}
+// #[derive(Debug, Error)]
+// pub enum GruError {
+//     #[error("Actor already exists: {0}")]
+//     ActorAlreadyExists(String),
+// }
+//
+// impl GruError {
+//     pub fn actor_already_exists<A>() -> Self
+//     where
+//         A: Minion,
+//     {
+//         Self::ActorAlreadyExists(type_name::<A>().to_string())
+//     }
+// }
 
 #[derive(Clone, Default)]
 pub struct Gru {
-    pub(crate) actors: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
-    pub(crate) context: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
+    pub(crate) actors: Arc<RwLock<HashMap<TypeId, Box<dyn Any>>>>,
+    pub(crate) context: Arc<RwLock<HashMap<TypeId, Box<dyn Any>>>>,
 }
 
-#[async_trait]
-impl Dispatcher for Gru {
-    async fn send<A>(&self, message: A::Msg) -> Result<(), MessageError>
-    where
-        A: Minion + Clone,
-        <A as Minion>::Msg: Clone,
-    {
-        if let Some(actor) = self.get_actor::<A>() {
-            let recipient_address = Address::from_type::<A>();
-            actor
-                .tx
-                .send(message, actor.address.clone(), recipient_address)
-                .await
-                .map_err(|_| MessageError::message_send_error::<A>())
-        } else {
-            Err(MessageError::actor_does_not_exist::<A>())
+#[derive(Clone, Debug, Default, Eq, PartialEq, Ord, PartialOrd)]
+pub struct Address<M: Messageable> {
+    pub tx: mpsc::Sender<Packet<M>>,
+    pub name: String,
+}
+
+impl Address {
+    pub fn new<T: Hash>(id: T, name: impl Into<String>) -> Self {
+        let mut hasher = AHasher::default();
+        id.hash(&mut hasher);
+        Self {
+            id: hasher.finish(),
+            name: name.into(),
         }
     }
 
-    // async fn ask<A>(
-    //     &self,
-    //     message: A::Msg,
-    // ) -> Result<<<A as Minion>::Msg as Messageable>::Response, MessageError>
-    // where
-    //     A: Minion,
-    //     <A as Minion>::Msg: std::clone::Clone,
-    // {
-    //     if let Some(actor) = self.get_actor::<A>() {
-    //         let recipient_address = Address::from_type::<A>();
-    //         actor
-    //             .tx
-    //             .send_and_await_response(message, actor.address.clone(), recipient_address)
-    //             .await
-    //             .map_err(|_| MessageError::response_receive_error::<A>())
-    //     } else {
-    //         Err(MessageError::actor_does_not_exist::<A>())
-    //     }
-    // }
-    //
-    // async fn ask_with_timeout<A>(
-    //     &self,
-    //     message: A::Msg,
-    //     timeout: std::time::Duration,
-    // ) -> Result<<<A as Minion>::Msg as Messageable>::Response, MessageError>
-    // where
-    //     A: Minion,
-    //     <A as Minion>::Msg: std::clone::Clone,
-    // {
-    //     if let Some(actor) = self.get_actor::<A>() {
-    //         let recipient_address = Address::from_type::<A>();
-    //         tokio::time::timeout(
-    //             timeout,
-    //             actor
-    //                 .tx
-    //                 .send_and_await_response(message, actor.address.clone(), recipient_address)
-    //                 .await,
-    //         )
-    //         .await
-    //         .map_err(|_| MessageError::actor_response_timeout::<A>())?
-    //         .map_err(|_| MessageError::message_receive_error::<A>())
-    //     } else {
-    //         Err(MessageError::actor_does_not_exist::<A>())
-    //     }
-    // }
-
-    // async fn ask_service<A>(&self, message: ServiceCommand) -> Result<(), MessageError>
-    // where
-    //     A: Minion,
-    //     <A as Minion>::Msg: Clone,
-    // {
-    //     if let Some(actor) = self.get_actor::<A>() {
-    //         actor
-    //             .service_tx
-    //             .send_and_await_response::<A>(message)
-    //             .await
-    //             .map_err(|_| MessageError::response_receive_error::<A>())
-    //     } else {
-    //         Err(MessageError::actor_does_not_exist::<A>())
-    //     }
-    // }
+    pub fn from_type<T: 'static>() -> Self {
+        let type_id = TypeId::of::<T>();
+        let type_name = type_name::<T>().to_string();
+        Address::new(type_id, type_name)
+    }
 }
+
+impl fmt::Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Address {{ id: {}, name: {} }}", self.id, self.name)
+    }
+}
+
+impl Hash for Address {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        let mut hasher = AHasher::default();
+        self.id.hash(&mut hasher);
+        state.write_u64(hasher.finish());
+    }
+}
+
+// #[async_trait]
+// impl Dispatcher for Gru {
+//     async fn send<A>(&self, message: A::Msg) -> Result<(), MessageBuilderError>
+//     where
+//         A: Minion + Clone,
+//         <A as Minion>::Msg: Clone,
+//     {
+//         if let Some(actor) = self.get_actor::<A>() {
+//             println!("Sending message to actor: {:?}", actor.address);
+//             let recipient_address = Address::from_type::<A>();
+//             actor
+//                 .tx
+//                 .send(message, actor.address.clone(), recipient_address)
+//                 .await
+//                 .map_err(|err| {
+//                     println!("errr {}", err);
+//                     MessageBuilderError::message_send_error::<A>()
+//                 })
+//         } else {
+//             Err(MessageBuilderError::actor_does_not_exist::<A>())
+//         }
+//     }
+//
+//     // async fn ask<A>(
+//     //     &self,
+//     //     message: A::Msg,
+//     // ) -> Result<<<A as Minion>::Msg as Messageable>::Response, MessageError>
+//     // where
+//     //     A: Minion,
+//     //     <A as Minion>::Msg: std::clone::Clone,
+//     // {
+//     //     if let Some(actor) = self.get_actor::<A>() {
+//     //         let recipient_address = Address::from_type::<A>();
+//     //         actor
+//     //             .tx
+//     //             .send_and_await_response(message, actor.address.clone(), recipient_address)
+//     //             .await
+//     //             .map_err(|_| MessageError::response_receive_error::<A>())
+//     //     } else {
+//     //         Err(MessageError::actor_does_not_exist::<A>())
+//     //     }
+//     // }
+//     //
+//     // async fn ask_with_timeout<A>(
+//     //     &self,
+//     //     message: A::Msg,
+//     //     timeout: std::time::Duration,
+//     // ) -> Result<<<A as Minion>::Msg as Messageable>::Response, MessageError>
+//     // where
+//     //     A: Minion,
+//     //     <A as Minion>::Msg: std::clone::Clone,
+//     // {
+//     //     if let Some(actor) = self.get_actor::<A>() {
+//     //         let recipient_address = Address::from_type::<A>();
+//     //         tokio::time::timeout(
+//     //             timeout,
+//     //             actor
+//     //                 .tx
+//     //                 .send_and_await_response(message, actor.address.clone(), recipient_address)
+//     //                 .await,
+//     //         )
+//     //         .await
+//     //         .map_err(|_| MessageError::actor_response_timeout::<A>())?
+//     //         .map_err(|_| MessageError::message_receive_error::<A>())
+//     //     } else {
+//     //         Err(MessageError::actor_does_not_exist::<A>())
+//     //     }
+//     // }
+//
+//     // async fn ask_service<A>(&self, message: ServiceCommand) -> Result<(), MessageError>
+//     // where
+//     //     A: Minion,
+//     //     <A as Minion>::Msg: Clone,
+//     // {
+//     //     if let Some(actor) = self.get_actor::<A>() {
+//     //         actor
+//     //             .service_tx
+//     //             .send_and_await_response::<A>(message)
+//     //             .await
+//     //             .map_err(|_| MessageError::response_receive_error::<A>())
+//     //     } else {
+//     //         Err(MessageError::actor_does_not_exist::<A>())
+//     //     }
+//     // }
+// }
 
 impl Gru {
     pub fn new() -> Self {
@@ -157,7 +195,12 @@ impl Gru {
                 spawnable_actor.buffer_size,
                 spawnable_actor.service_buffer_size,
             );
-            spawnable_actor.spawn(&self);
+            spawnable_actor.spawn(
+                &self,
+                handle,
+                instance.clone(),
+                spawnable_actor.actor.clone(),
+            );
             self.actors
                 .write()
                 .expect("Failed to acquire write lock")
@@ -218,69 +261,69 @@ impl Gru {
     // }
 }
 
-#[async_trait]
-impl Context for Gru {
-    fn provide_context<T: Any + Clone + Send + Sync>(&self, context: T) -> Option<T> {
-        self.context
-            .write()
-            .expect("Failed to acquire write lock")
-            .insert(TypeId::of::<T>(), Box::new(context))
-            .and_then(|box_any| box_any.downcast::<T>().ok().map(|boxed_value| *boxed_value))
-    }
-
-    fn get_context<T: Any + Clone + Send + Sync>(&self) -> Option<T> {
-        self.context
-            .read()
-            .expect("Failed to acquire read lock")
-            .get(&TypeId::of::<T>())
-            .and_then(|ref_entry| ref_entry.downcast_ref::<T>())
-            .cloned()
-    }
-
-    fn with_context<T, R, F>(&self, f: F) -> R
-    where
-        T: Any + Clone + Send + Sync,
-        F: FnOnce(Option<&T>) -> R + Send,
-    {
-        match self
-            .context
-            .write()
-            .expect("Failed to acquire read lock")
-            .get(&TypeId::of::<T>())
-        {
-            Some(context) => {
-                let typed_context = context.downcast_ref::<T>();
-                if typed_context.is_none() {
-                    unreachable!()
-                }
-                f(typed_context)
-            }
-            None => f(None),
-        }
-    }
-
-    fn with_context_mut<T, R, F>(&self, f: F) -> R
-    where
-        T: Any + Clone + Send + Sync,
-        F: FnOnce(Option<&mut T>) -> R + Send,
-    {
-        match self
-            .context
-            .write()
-            .expect("Failed to acquire write lock")
-            .get_mut(&TypeId::of::<T>())
-        {
-            Some(context) => {
-                let typed_context = context.downcast_mut::<T>();
-                if typed_context.is_none() {
-                    unreachable!()
-                }
-                f(typed_context)
-            }
-            None => f(None),
-        }
-    }
-}
+// #[async_trait]
+// impl Context for Gru {
+//     fn provide_context<T: Any + Clone + Send + Sync>(&self, context: T) -> Option<T> {
+//         self.context
+//             .write()
+//             .expect("Failed to acquire write lock")
+//             .insert(TypeId::of::<T>(), Box::new(context))
+//             .and_then(|box_any| box_any.downcast::<T>().ok().map(|boxed_value| *boxed_value))
+//     }
+//
+//     fn get_context<T: Any + Clone + Send + Sync>(&self) -> Option<T> {
+//         self.context
+//             .read()
+//             .expect("Failed to acquire read lock")
+//             .get(&TypeId::of::<T>())
+//             .and_then(|ref_entry| ref_entry.downcast_ref::<T>())
+//             .cloned()
+//     }
+//
+//     fn with_context<T, R, F>(&self, f: F) -> R
+//     where
+//         T: Any + Clone + Send + Sync,
+//         F: FnOnce(Option<&T>) -> R + Send,
+//     {
+//         match self
+//             .context
+//             .write()
+//             .expect("Failed to acquire read lock")
+//             .get(&TypeId::of::<T>())
+//         {
+//             Some(context) => {
+//                 let typed_context = context.downcast_ref::<T>();
+//                 if typed_context.is_none() {
+//                     unreachable!()
+//                 }
+//                 f(typed_context)
+//             }
+//             None => f(None),
+//         }
+//     }
+//
+//     fn with_context_mut<T, R, F>(&self, f: F) -> R
+//     where
+//         T: Any + Clone + Send + Sync,
+//         F: FnOnce(Option<&mut T>) -> R + Send,
+//     {
+//         match self
+//             .context
+//             .write()
+//             .expect("Failed to acquire write lock")
+//             .get_mut(&TypeId::of::<T>())
+//         {
+//             Some(context) => {
+//                 let typed_context = context.downcast_mut::<T>();
+//                 if typed_context.is_none() {
+//                     unreachable!()
+//                 }
+//                 f(typed_context)
+//             }
+//             None => f(None),
+//         }
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
@@ -309,7 +352,8 @@ mod tests {
         impl Minion for TestActor {
             type Msg = TestMessage;
             type State = ();
-            async fn handle_message() -> <<Self as Minion>::Msg as Messageable>::Response {
+            async fn handle_message(&self) -> <<Self as Minion>::Msg as Messageable>::Response {
+                println!("TestActor::handle_message");
                 0
             }
         }

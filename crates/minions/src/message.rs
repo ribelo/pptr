@@ -9,12 +9,12 @@ use crate::{
     minion::{Address, Minion},
 };
 
-pub trait Messageable: Debug + Send + Sync {
-    type Response: Debug + Send + Sync;
+pub trait Messageable: Send + Sync {
+    type Response: Send + Sync;
 }
 
 #[derive(Debug, Error)]
-pub enum EnvelopeError {
+pub enum MessageBuilderError {
     #[error("Missing message")]
     MissingMessage,
     #[error("Missing sender")]
@@ -24,36 +24,36 @@ pub enum EnvelopeError {
 }
 
 #[derive(Debug, Default)]
-pub(crate) struct Envelope<M>
+pub(crate) struct Message<M>
 where
     M: Messageable,
 {
-    pub message: M,
+    pub data: M,
     pub sender: Address,
     pub recipient: Address,
     pub awaiting_response: bool,
 }
 
 #[derive(Debug, Default)]
-pub struct EnvelopeBuilder<M: Messageable> {
-    message: Option<M>,
+pub struct MessageBuilder<M: Messageable> {
+    data: Option<M>,
     sender: Option<Address>,
     recipient: Option<Address>,
     awaiting_response: bool,
 }
 
-impl<M: Messageable> EnvelopeBuilder<M> {
+impl<M: Messageable> MessageBuilder<M> {
     pub fn new() -> Self {
         Self {
-            message: None,
+            data: None,
             sender: None,
             recipient: None,
             awaiting_response: false,
         }
     }
 
-    pub fn message(mut self, message: impl Into<M>) -> Self {
-        self.message = Some(message.into());
+    pub fn data(mut self, message: impl Into<M>) -> Self {
+        self.data = Some(message.into());
         self
     }
 
@@ -72,11 +72,13 @@ impl<M: Messageable> EnvelopeBuilder<M> {
         self
     }
 
-    pub fn build(self) -> Result<Envelope<M>, EnvelopeError> {
-        Ok(Envelope {
-            message: self.message.ok_or(EnvelopeError::MissingMessage)?,
-            sender: self.sender.ok_or(EnvelopeError::MissingSender)?,
-            recipient: self.recipient.ok_or(EnvelopeError::MissingRecipient)?,
+    pub fn build(self) -> Result<Message<M>, MessageBuilderError> {
+        Ok(Message {
+            data: self.data.ok_or(MessageBuilderError::MissingMessage)?,
+            sender: self.sender.ok_or(MessageBuilderError::MissingSender)?,
+            recipient: self
+                .recipient
+                .ok_or(MessageBuilderError::MissingRecipient)?,
             awaiting_response: self.awaiting_response,
         })
     }
@@ -91,26 +93,26 @@ pub enum PacketError {
 }
 
 pub(crate) struct Packet<M: Messageable> {
-    pub(crate) envelope: Envelope<M>,
+    pub(crate) envelope: Message<M>,
     pub(crate) reply_address: Option<oneshot::Sender<M::Response>>,
 }
 
 pub(crate) struct PacketBuilder<M: Messageable> {
-    envelope_builder: EnvelopeBuilder<M>,
+    envelope_builder: MessageBuilder<M>,
     reply_address: Option<oneshot::Sender<M::Response>>,
 }
 
 impl<M: Messageable> PacketBuilder<M> {
     pub fn new() -> Self {
         Self {
-            envelope_builder: EnvelopeBuilder::new(),
+            envelope_builder: MessageBuilder::new(),
             reply_address: None,
         }
     }
 
     // Delegated methods for building Envelope
     pub fn message(mut self, message: impl Into<M>) -> Self {
-        self.envelope_builder = self.envelope_builder.message(message);
+        self.envelope_builder = self.envelope_builder.data(message);
         self
     }
 
@@ -190,10 +192,11 @@ where
                 recipient: recipient.clone(),
             })?;
 
-        self.tx
-            .send(packet)
-            .await
-            .map_err(|_| PostmanError::PacketSendFailed { sender, recipient })?;
+        println!("closed? {}", self.tx.is_closed());
+        self.tx.send(packet).await.map_err(|err| {
+            println!("Packet send failed: {:?}", err);
+            PostmanError::PacketSendFailed { sender, recipient }
+        })?;
         Ok(())
     }
 
