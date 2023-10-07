@@ -1,14 +1,24 @@
-use std::{any::type_name, fmt::Debug};
+use std::fmt::Debug;
 
 use minions_derive::Message;
 use thiserror::Error;
 use tokio::sync::oneshot;
 
-use crate::minion::Minion;
+use crate::MinionsError;
 
-pub trait Message: Debug + Send + Sync {
-    type Response: Debug + Send + Sync;
+pub trait Message: Send {
+    type Response: Send + 'static;
 }
+
+#[derive(Debug, Clone, Message, strum::Display)]
+pub enum ServiceCommand {
+    Start,
+    Stop,
+    Restart,
+    Terminate,
+}
+
+impl Copy for ServiceCommand {}
 
 #[derive(Debug, Error)]
 pub enum MessageBuilderError {
@@ -30,22 +40,9 @@ pub enum PacketError {
 
 pub(crate) struct Packet<M: Message> {
     pub message: M,
-    pub(crate) reply_address: Option<oneshot::Sender<M::Response>>,
+    pub(crate) reply_address: Option<oneshot::Sender<Result<M::Response, MinionsError>>>,
 }
 
-#[derive(Debug, Error)]
-pub enum PostmanError {
-    // #[error("Packet build failed for sender: {sender}, recipient: {recipient}")]
-    // PacketBuildFailed { sender: Address, recipient: Address },
-    //
-    #[error("Packet send failed: {0}")]
-    PacketSendFailed(String),
-    //
-    #[error("Response receive failed: {0}")]
-    ResponseReceiveFailed(String),
-}
-//
-#[derive(Clone, Debug)]
 pub(crate) struct Postman<M>
 where
     M: Message,
@@ -53,12 +50,26 @@ where
     tx: tokio::sync::mpsc::Sender<Packet<M>>,
 }
 
-impl<M: Message> Postman<M> {
+impl<M> Clone for Postman<M>
+where
+    M: Message,
+{
+    fn clone(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+        }
+    }
+}
+
+impl<M> Postman<M>
+where
+    M: Message + 'static,
+{
     pub fn new(tx: tokio::sync::mpsc::Sender<Packet<M>>) -> Self {
         Self { tx }
     }
 
-    pub async fn send(&self, message: M) -> Result<(), PostmanError> {
+    pub async fn send(&self, message: M) -> Result<(), MinionsError> {
         let packet = Packet {
             message,
             reply_address: None,
@@ -66,12 +77,12 @@ impl<M: Message> Postman<M> {
         self.tx
             .send(packet)
             .await
-            .map_err(|err| PostmanError::PacketSendFailed(err.to_string()))?;
+            .map_err(|_| MinionsError::MessageSendError)?;
         Ok(())
     }
 
-    pub async fn send_and_await_response(&self, message: M) -> Result<M::Response, PostmanError> {
-        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<M::Response>();
+    pub async fn send_and_await_response(&self, message: M) -> Result<M::Response, MinionsError> {
+        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<M::Response, MinionsError>>();
 
         let packet = Packet {
             message,
@@ -81,11 +92,13 @@ impl<M: Message> Postman<M> {
         self.tx
             .send(packet)
             .await
-            .map_err(|err| PostmanError::PacketSendFailed(err.to_string()))?;
+            .map_err(|_| MinionsError::MessageSendError)?;
 
-        res_rx
-            .await
-            .map_err(|err| PostmanError::ResponseReceiveFailed(err.to_string()))
+        match res_rx.await {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Err(MinionsError::MessageResponseReceiveError),
+        }
     }
 }
 
@@ -106,69 +119,5 @@ where
     }
     pub async fn recv(&mut self) -> Option<Packet<M>> {
         self.rx.recv().await
-    }
-}
-
-#[derive(Debug, Clone, Message)]
-pub(crate) enum ServiceMessage {
-    Start,
-    Stop,
-    Pause,
-    Resume,
-}
-
-#[derive(Error, Debug)]
-pub enum MessageError {
-    #[error("Actor does not exist: {0}")]
-    ActorDoesNotExist(String),
-    #[error("Timed out waiting for response from actor: {actor} for message {msg}")]
-    MessageResponseTimeout { msg: String, actor: String },
-    #[error("Error sending message {msg} to actor: {actor}")]
-    MessageSendError { msg: String, actor: String },
-    #[error("Error receiving message {msg} from actor: {actor}")]
-    MessageReceiveError { msg: String, actor: String },
-    #[error("Error receiving response from actor: {actor} for message {msg}")]
-    ResponseReceiveError { msg: String, actor: String },
-}
-
-impl MessageError {
-    pub fn actor_does_not_exist<A>() -> Self
-    where
-        A: Minion,
-    {
-        Self::ActorDoesNotExist(type_name::<A>().to_string())
-    }
-    pub fn actor_response_timeout<A>() -> Self
-    where
-        A: Minion,
-    {
-        Self::MessageResponseTimeout {
-            msg: type_name::<A::Msg>().to_string(),
-            actor: type_name::<A>().to_string(),
-        }
-    }
-    pub fn message_send_error<A>() -> Self
-    where
-        A: Minion,
-    {
-        Self::MessageSendError {
-            msg: type_name::<A::Msg>().to_string(),
-            actor: type_name::<A>().to_string(),
-        }
-    }
-    pub fn message_receive_error<A>() -> Self
-    where
-        A: Minion,
-    {
-        Self::MessageReceiveError {
-            msg: type_name::<A::Msg>().to_string(),
-            actor: type_name::<A>().to_string(),
-        }
-    }
-    pub fn response_receive_error<A: Minion>() -> Self {
-        Self::ResponseReceiveError {
-            msg: type_name::<A::Msg>().to_string(),
-            actor: type_name::<A>().to_string(),
-        }
     }
 }

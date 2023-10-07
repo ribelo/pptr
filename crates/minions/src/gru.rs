@@ -1,38 +1,21 @@
 use std::{
     any::{type_name, Any, TypeId},
-    collections::HashMap,
-    fmt,
-    sync::{Arc, LazyLock, Mutex, RwLock},
+    future::Future,
+    mem,
+    sync::{Arc, LazyLock, RwLock},
 };
 
-pub static GRU: LazyLock<Gru> = LazyLock::new(|| Gru::new());
-
-use async_trait::async_trait;
-use thiserror::Error;
-use tokio::sync::mpsc;
+use hashbrown::HashMap;
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     address::Address,
-    message::{Mailbox, Message, Packet, Postman, ServiceMessage},
+    message::{Mailbox, Message, Packet, Postman, ServiceCommand},
     minion::{LifecycleStatus, Minion, MinionHandle, MinionId, MinionInstance, MinionStruct},
+    MinionsError,
 };
 
-#[derive(Debug, Error)]
-pub enum GruError {
-    #[error("Minion already exists: {0}")]
-    MinionAlreadyExists(String),
-    #[error("Minion does not exist: {0}")]
-    MinionDoesNotExist(String),
-}
-
-impl GruError {
-    pub fn actor_already_exists<A>() -> Self
-    where
-        A: Minion,
-    {
-        Self::MinionAlreadyExists(type_name::<A>().to_string())
-    }
-}
+pub static GRU: LazyLock<Gru> = LazyLock::new(Gru::new);
 
 #[derive(Clone, Default)]
 pub struct Gru {
@@ -40,56 +23,106 @@ pub struct Gru {
     pub(crate) context: Arc<RwLock<HashMap<TypeId, Box<dyn Any + Send + Sync>>>>,
 }
 
-fn instance_exists<A>() -> bool
+pub fn with_instance<A, R, F>(f: F) -> R
 where
     A: Minion,
+    F: FnOnce(Option<&MinionInstance<A>>) -> R + Send,
 {
-    GRU.actors
+    let minion_id: MinionId = TypeId::of::<A>().into();
+    match GRU
+        .actors
         .read()
         .expect("Failed to acquire read lock")
-        .contains_key(&TypeId::of::<A>().into())
+        .get(&minion_id)
+    {
+        Some(any_actor) => {
+            let instance = unsafe { any_actor.downcast_ref_unchecked::<MinionInstance<A>>() };
+            f(Some(instance))
+        }
+        None => f(None),
+    }
 }
 
-fn get_instance<A>() -> Option<MinionInstance<A>>
+pub fn get_status<A>() -> Option<LifecycleStatus>
 where
     A: Minion,
 {
+    let minion_id: MinionId = TypeId::of::<A>().into();
     GRU.actors
         .read()
         .expect("Failed to acquire read lock")
-        .get(&TypeId::of::<A>().into())
-        .and_then(|any_actor| any_actor.downcast_ref::<MinionInstance<A>>())
-        .cloned()
+        .get(&minion_id)
+        .map(|any_actor| unsafe { any_actor.downcast_ref_unchecked::<MinionInstance<A>>() })
+        .map(|instance| *instance.status_tx.borrow())
 }
 
-fn get_postman<A>() -> Option<Postman<A::Msg>>
+pub fn set_status<A>(status: LifecycleStatus)
 where
     A: Minion,
 {
+    let minion_id: MinionId = TypeId::of::<A>().into();
+    if let Some(instance) = GRU
+        .actors
+        .write()
+        .expect("Failed to acquire write lock")
+        .get_mut(&minion_id)
+        .map(|any_actor| unsafe { any_actor.downcast_mut_unchecked::<MinionInstance<A>>() })
+    {
+        instance.status_tx.send_if_modified(|old| {
+            if *old != status {
+                *old = status;
+                true
+            } else {
+                false
+            }
+        });
+    }
+}
+
+pub fn instance_exists<A>() -> bool
+where
+    A: Minion,
+{
+    let minion_id: MinionId = TypeId::of::<A>().into();
     GRU.actors
         .read()
         .expect("Failed to acquire read lock")
-        .get(&TypeId::of::<A>().into())
-        .and_then(|any_actor| any_actor.downcast_ref::<MinionInstance<A>>())
-        .map(|instance| instance.tx.clone())
+        .contains_key(&minion_id)
 }
 
 pub(crate) async fn run_minion_loop<A>(
+    address: Address<A>,
     mut handle: MinionHandle<A>,
-    actor: impl Minion<Msg = A::Msg>,
+    mut actor: impl Minion<Msg = A::Msg>,
 ) where
     A: Minion,
 {
+    actor
+        .start()
+        .await
+        .unwrap_or_else(|err| panic!("Minion {} failed to start. Err: {}", address, err));
+
     loop {
+        let status = *handle.status_rx.borrow();
+
+        if status.should_wait_for_activation() {
+            continue;
+        }
+
         tokio::select! {
-            Some(Packet {message, reply_address}) = handle.rx.recv() => {
-                match actor.handle_message(message).await {
-                    Ok(response) => {
-                        if let Some(tx) = reply_address {
-                            tx.send(response).expect("Cannot send response");
-                        }
+            Some(Packet { message, .. }) = handle.command_rx.recv() => {
+                actor.handle_command(message).await.unwrap_or_else(|_| panic!("Minion {} failed to handle command: {}", address, message));
+            }
+            Some(Packet { message, reply_address }) = handle.rx.recv() => {
+                if status.should_handle_message() {
+                    let response = actor.handle_message(message).await;
+                    if let Some(tx) = reply_address {
+                        tx.send(Ok(response)).unwrap_or_else(|_| panic!("Minion {} failed to send response", address));
                     }
-                    Err(err) => panic!("{}", err),
+                } else if status.should_drop_message() {
+                    if let Some(tx) = reply_address {
+                        tx.send(Err(MinionsError::MinionCannotHandleMessage(status))).unwrap_or_else(|_| panic!("Minion {} failed to send response", address));
+                    }
                 }
             }
         }
@@ -100,50 +133,99 @@ fn create_minion_entities<A>(minion: &MinionStruct<A>) -> (MinionHandle<A>, Mini
 where
     A: Minion,
 {
-    let id = TypeId::of::<A>().into();
-    let (tx, rx) = tokio::sync::mpsc::channel::<Packet<A::Msg>>(minion.buffer_size);
-    let (service_tx, service_rx) =
-        tokio::sync::mpsc::channel::<Packet<ServiceMessage>>(minion.service_buffer_size);
+    let (tx, rx) = mpsc::channel::<Packet<A::Msg>>(minion.buffer_size);
+    let (command_tx, command_rx) =
+        mpsc::channel::<Packet<ServiceCommand>>(minion.commands_buffer_size);
+    let (status_tx, status_rx) = watch::channel(LifecycleStatus::Activating);
 
-    let status = Arc::new(Mutex::new(LifecycleStatus::Activating));
     let handler = MinionHandle {
-        id,
-        status: status.clone(),
+        status_rx,
         rx: Mailbox::new(rx),
-        service_rx: Mailbox::new(service_rx),
+        command_rx: Mailbox::new(command_rx),
     };
     let instance = MinionInstance {
-        id,
-        status,
+        status_tx,
         tx: Postman::new(tx),
-        service_tx: Postman::new(service_tx),
+        command_tx: Postman::new(command_tx),
     };
     (handler, instance)
 }
 
-pub fn spawn<A: Minion>(minion: impl Into<MinionStruct<A>>) -> Result<(), GruError> {
+pub fn spawn<A>(minion: impl Into<MinionStruct<A>>) -> Result<Address<A>, MinionsError>
+where
+    A: Minion,
+{
     let minion = minion.into();
-    let id = TypeId::of::<A>().into();
-    let name = type_name::<A>().to_string();
+    let address = Address::<A>::new();
     if instance_exists::<A>() {
-        Err(GruError::MinionAlreadyExists(name))
+        Err(MinionsError::MinionAlreadyExists(address.name))
     } else {
         let (handle, instance) = create_minion_entities(&minion);
-        tokio::spawn(run_minion_loop(handle, minion.minion));
         GRU.actors
             .write()
             .expect("Failed to acquire write lock")
-            .insert(id, Box::new(instance));
-        Ok(())
+            .insert(address.id, Box::new(instance));
+        tokio::spawn(run_minion_loop(address.clone(), handle, minion.minion));
+        Ok(address)
     }
 }
 
-pub async fn send<A: Minion>(message: impl Into<A::Msg>) -> Result<(), GruError> {
-    if let Some(postman) = get_postman::<A>() {
-        postman.send(message.into()).await.unwrap();
+pub async fn send<A>(message: impl Into<A::Msg>) -> Result<(), MinionsError>
+where
+    A: Minion,
+{
+    let result = with_instance::<A, _, _>(|instance| {
+        instance.map(|inst| (inst.tx.clone(), *inst.status_tx.borrow()))
+    });
+    match result {
+        Some((postman, status)) => match status {
+            LifecycleStatus::Active | LifecycleStatus::Activating | LifecycleStatus::Restarting => {
+                postman.send(message.into()).await
+            }
+            _ => Err(MinionsError::MinionCannotHandleMessage(status)),
+        },
+        None => Err(MinionsError::MinionDoesNotExist(
+            type_name::<A>().to_string(),
+        )),
+    }
+}
+
+pub async fn ask<A>(
+    message: impl Into<A::Msg>,
+) -> Result<<A::Msg as Message>::Response, MinionsError>
+where
+    A: Minion,
+{
+    let result = with_instance::<A, _, _>(|instance| {
+        instance.map(|inst| (inst.tx.clone(), *inst.status_tx.borrow()))
+    });
+
+    match result {
+        Some((postman, status)) => match status {
+            LifecycleStatus::Active | LifecycleStatus::Activating | LifecycleStatus::Restarting => {
+                postman.send_and_await_response(message.into()).await
+            }
+            _ => Err(MinionsError::MinionCannotHandleMessage(status)),
+        },
+        None => Err(MinionsError::MinionDoesNotExist(
+            type_name::<A>().to_string(),
+        )),
+    }
+}
+
+pub async fn control<A>(command: ServiceCommand) -> Result<(), MinionsError>
+where
+    A: Minion,
+{
+    if let Some(postman) =
+        with_instance::<A, _, _>(|instance| instance.map(|inst| inst.command_tx.clone()))
+    {
+        postman.send(command).await?;
         Ok(())
     } else {
-        Err(GruError::MinionDoesNotExist(type_name::<A>().to_string()))
+        Err(MinionsError::MinionDoesNotExist(
+            type_name::<A>().to_string(),
+        ))
     }
 }
 
@@ -152,92 +234,6 @@ impl Gru {
         Default::default()
     }
 }
-
-// #[async_trait]
-// impl Dispatcher for Gru {
-//     async fn send<A>(&self, message: A::Msg) -> Result<(), MessageBuilderError>
-//     where
-//         A: Minion + Clone,
-//         <A as Minion>::Msg: Clone,
-//     {
-//         if let Some(actor) = self.get_actor::<A>() {
-//             println!("Sending message to actor: {:?}", actor.address);
-//             let recipient_address = Address::from_type::<A>();
-//             actor
-//                 .tx
-//                 .send(message, actor.address.clone(), recipient_address)
-//                 .await
-//                 .map_err(|err| {
-//                     println!("errr {}", err);
-//                     MessageBuilderError::message_send_error::<A>()
-//                 })
-//         } else {
-//             Err(MessageBuilderError::actor_does_not_exist::<A>())
-//         }
-//     }
-//
-//     // async fn ask<A>(
-//     //     &self,
-//     //     message: A::Msg,
-//     // ) -> Result<<<A as Minion>::Msg as Messageable>::Response, MessageError>
-//     // where
-//     //     A: Minion,
-//     //     <A as Minion>::Msg: std::clone::Clone,
-//     // {
-//     //     if let Some(actor) = self.get_actor::<A>() {
-//     //         let recipient_address = Address::from_type::<A>();
-//     //         actor
-//     //             .tx
-//     //             .send_and_await_response(message, actor.address.clone(), recipient_address)
-//     //             .await
-//     //             .map_err(|_| MessageError::response_receive_error::<A>())
-//     //     } else {
-//     //         Err(MessageError::actor_does_not_exist::<A>())
-//     //     }
-//     // }
-//     //
-//     // async fn ask_with_timeout<A>(
-//     //     &self,
-//     //     message: A::Msg,
-//     //     timeout: std::time::Duration,
-//     // ) -> Result<<<A as Minion>::Msg as Messageable>::Response, MessageError>
-//     // where
-//     //     A: Minion,
-//     //     <A as Minion>::Msg: std::clone::Clone,
-//     // {
-//     //     if let Some(actor) = self.get_actor::<A>() {
-//     //         let recipient_address = Address::from_type::<A>();
-//     //         tokio::time::timeout(
-//     //             timeout,
-//     //             actor
-//     //                 .tx
-//     //                 .send_and_await_response(message, actor.address.clone(), recipient_address)
-//     //                 .await,
-//     //         )
-//     //         .await
-//     //         .map_err(|_| MessageError::actor_response_timeout::<A>())?
-//     //         .map_err(|_| MessageError::message_receive_error::<A>())
-//     //     } else {
-//     //         Err(MessageError::actor_does_not_exist::<A>())
-//     //     }
-//     // }
-//
-//     // async fn ask_service<A>(&self, message: ServiceCommand) -> Result<(), MessageError>
-//     // where
-//     //     A: Minion,
-//     //     <A as Minion>::Msg: Clone,
-//     // {
-//     //     if let Some(actor) = self.get_actor::<A>() {
-//     //         actor
-//     //             .service_tx
-//     //             .send_and_await_response::<A>(message)
-//     //             .await
-//     //             .map_err(|_| MessageError::response_receive_error::<A>())
-//     //     } else {
-//     //         Err(MessageError::actor_does_not_exist::<A>())
-//     //     }
-//     // }
-// }
 
 // #[async_trait]
 // impl Context for Gru {
@@ -249,78 +245,25 @@ impl Gru {
 //             .and_then(|box_any| box_any.downcast::<T>().ok().map(|boxed_value| *boxed_value))
 //     }
 //
-//     fn get_context<T: Any + Clone + Send + Sync>(&self) -> Option<T> {
-//         self.context
-//             .read()
-//             .expect("Failed to acquire read lock")
-//             .get(&TypeId::of::<T>())
-//             .and_then(|ref_entry| ref_entry.downcast_ref::<T>())
-//             .cloned()
-//     }
-//
-//     fn with_context<T, R, F>(&self, f: F) -> R
-//     where
-//         T: Any + Clone + Send + Sync,
-//         F: FnOnce(Option<&T>) -> R + Send,
-//     {
-//         match self
-//             .context
-//             .write()
-//             .expect("Failed to acquire read lock")
-//             .get(&TypeId::of::<T>())
-//         {
-//             Some(context) => {
-//                 let typed_context = context.downcast_ref::<T>();
-//                 if typed_context.is_none() {
-//                     unreachable!()
-//                 }
-//                 f(typed_context)
-//             }
-//             None => f(None),
-//         }
-//     }
-//
-//     fn with_context_mut<T, R, F>(&self, f: F) -> R
-//     where
-//         T: Any + Clone + Send + Sync,
-//         F: FnOnce(Option<&mut T>) -> R + Send,
-//     {
-//         match self
-//             .context
-//             .write()
-//             .expect("Failed to acquire write lock")
-//             .get_mut(&TypeId::of::<T>())
-//         {
-//             Some(context) => {
-//                 let typed_context = context.downcast_mut::<T>();
-//                 if typed_context.is_none() {
-//                     unreachable!()
-//                 }
-//                 f(typed_context)
-//             }
-//             None => f(None),
-//         }
-//     }
 // }
 
+#[allow(dead_code)]
 #[cfg(test)]
 mod tests {
 
-    use minions_derive::minion;
+    use async_trait::async_trait;
+    use minions_derive::Message;
 
-    use crate::minion::MinionError;
+    use crate::context::provide_context;
 
     use super::*;
 
     #[tokio::test]
     async fn it_works() {
-        #[derive(Debug, Clone)]
+        #[derive(Debug, Clone, Message)]
+        #[message(response = i32)]
         pub struct TestMessage {
             i: i32,
-        }
-
-        impl Message for TestMessage {
-            type Response = i32;
         }
 
         #[derive(Debug, Default, Clone)]
@@ -331,19 +274,23 @@ mod tests {
         #[async_trait]
         impl Minion for TestActor {
             type Msg = TestMessage;
-            async fn handle_message(
-                &self,
-                msg: Self::Msg,
-            ) -> Result<<Self::Msg as Message>::Response, MinionError> {
+            async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response {
                 println!("Received message: {:?}", msg);
-                send::<Self>(TestMessage { i: msg.i + 1 }).await.unwrap();
-                Ok(msg.i)
+                // with_context(|ctx: Option<i32>| async move {
+                //     println!("Context: {:?}", ctx);
+                // })
+                // .await;
+                // send::<Self>(TestMessage { i: msg.i + 1 }).await.unwrap();
+                msg.i
             }
         }
 
+        provide_context::<i32>(0);
         spawn(TestActor { i: 0 }).unwrap();
-        send::<TestActor>(TestMessage { i: 0 }).await.unwrap();
-
+        let x = ask::<TestActor>(TestMessage { i: 0 }).await.unwrap();
+        println!("a {}", x);
+        control::<TestActor>(ServiceCommand::Stop).await.unwrap();
+        println!("b {}", x);
         tokio::time::sleep(std::time::Duration::from_secs(5)).await;
     }
 }
