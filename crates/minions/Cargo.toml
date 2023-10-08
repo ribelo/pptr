@@ -19,7 +19,10 @@ dashmap = "5.5.3"
 
 [dev-dependencies]
 actix = "0.13.1"
+vin = "9.1"
+ractor = "0.9"
 criterion = "0.5"
+coerce = "0.8.10"
 
 
 [[bench]]
@@ -28,6 +31,18 @@ harness = false
 
 [[bench]]
 name = "actix_bench"
+harness = false
+
+[[bench]]
+name = "vin_bench"
+harness = false
+
+[[bench]]
+name = "ractor_bench"
+harness = false
+
+[[bench]]
+name = "coerce_bench"
 harness = false
 
 [profile.bench]

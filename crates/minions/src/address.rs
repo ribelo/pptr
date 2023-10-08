@@ -52,11 +52,9 @@ impl<A: Minion> Address<A> {
     pub async fn send(&self, message: impl Into<A::Msg>) -> Result<(), MinionsError> {
         self.tx.send(message.into()).await
     }
-    pub async fn ask(
-        &self,
-        message: impl Into<A::Msg>,
-    ) -> Result<<A::Msg as Message>::Response, MinionsError> {
-        self.tx.send_and_await_response(message.into()).await
+    pub async fn ask(&self, message: impl Into<A::Msg>) -> Result<(), MinionsError> {
+        // self.tx.send_and_await_response(message.into()).await
+        Ok(())
     }
 }
 

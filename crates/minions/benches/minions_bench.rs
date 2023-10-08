@@ -3,55 +3,11 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use minions::{
     address::Address,
     context::{with_context, with_context_mut},
-    gru::{ask, instance_exists, spawn},
+    gru::{ask, instance_exists, send, spawn},
     message::Message,
     minion::Minion,
 };
 use minions_derive::Message;
-
-#[derive(Debug, Clone, Message)]
-#[message(response = i32)]
-pub struct TestMessage {
-    i: i32,
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Minion1 {
-    i: i32,
-}
-
-#[async_trait]
-impl Minion for Minion1 {
-    type Msg = TestMessage;
-    async fn handle_message(
-        &mut self,
-        msg: TestMessage,
-    ) -> <<Self as Minion>::Msg as Message>::Response {
-        self.i += 1;
-        self.i
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct Minion2 {
-    i: i32,
-}
-
-#[async_trait]
-impl Minion for Minion2 {
-    type Msg = TestMessage;
-    async fn handle_message(
-        &mut self,
-        _msg: TestMessage,
-    ) -> <<Self as Minion>::Msg as Message>::Response {
-        with_context_mut(|ctx: Option<&mut i32>| {
-            if let Some(ctx) = ctx {
-                *ctx += 1;
-            };
-        });
-        self.i
-    }
-}
 
 #[derive(Clone, Message)]
 #[message(response = usize)]
@@ -72,48 +28,34 @@ impl Minion for PingActor {
 
 fn benchmarks(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let mut minion = Minion1 { i: 0 };
-    let mut address: Option<Address<_>> = None; // Zakładam, że znasz typ `YourAddressType`
+    let mut ping_address: Option<Address<_>> = None; // Zakładam, że znasz typ `YourAddressType`
     runtime.block_on(async {
-        address = Some(spawn(minion.clone()).unwrap());
-        spawn(PingActor { count: 10 }).unwrap();
+        ping_address = Some(spawn(PingActor { count: 10 }).unwrap());
     });
-    c.bench_function("function call 1e5", |b| {
+    c.bench_function("minion send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let msg = TestMessage { i: 0 };
                 for _ in 0..100_000 {
-                    let _i = minion.handle_message(msg.clone()).await;
+                    send::<PingActor>(PingMessage(10)).await.unwrap();
                 }
             })
         })
     });
-    c.bench_function("minion ping 1e5", |b| {
+    c.bench_function("minion address send ping 1e5", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let address = ping_address.as_ref().unwrap();
+                for _ in 0..100_000 {
+                    address.send(PingMessage(10)).await.unwrap();
+                }
+            })
+        })
+    });
+    c.bench_function("minion ask ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
                 for _ in 0..100_000 {
                     let _res = ask::<PingActor>(PingMessage(10)).await;
-                }
-            })
-        })
-    });
-    c.bench_function("actor 1e5", |b| {
-        b.iter(|| {
-            runtime.block_on(async {
-                let msg = TestMessage { i: 0 };
-                for _ in 0..100_000 {
-                    let _i = ask::<Minion1>(msg.clone()).await.unwrap();
-                }
-            })
-        })
-    });
-    c.bench_function("address 1e5", |b| {
-        b.iter(|| {
-            runtime.block_on(async {
-                let msg = TestMessage { i: 0 };
-                let address = address.as_ref().unwrap();
-                for _ in 0..100_000 {
-                    let _i = address.ask(msg.clone()).await.unwrap();
                 }
             })
         })
