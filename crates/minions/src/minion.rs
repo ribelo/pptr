@@ -1,5 +1,5 @@
 use std::{
-    any::TypeId,
+    any::{type_name, TypeId},
     fmt::{self},
     hash::{Hash, Hasher},
     sync::OnceLock,
@@ -94,7 +94,7 @@ pub trait Minion: Send + Sized + 'static {
     }
 
     async fn start(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Starting minion {}", Address::<Self>::new());
+        tracing::debug!("Starting minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Activating);
         self.pre_start().await?;
         set_status::<Self>(LifecycleStatus::Active);
@@ -103,7 +103,7 @@ pub trait Minion: Send + Sized + 'static {
     }
 
     async fn stop(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Stopping minion {}", Address::<Self>::new());
+        tracing::debug!("Stopping minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Deactivating);
         self.pre_stop().await?;
         set_status::<Self>(LifecycleStatus::Inactive);
@@ -112,7 +112,7 @@ pub trait Minion: Send + Sized + 'static {
     }
 
     async fn restart(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Restarting minion {}", Address::<Self>::new());
+        tracing::debug!("Restarting minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Restarting);
         self.stop().await?;
         self.start().await?;
@@ -120,7 +120,7 @@ pub trait Minion: Send + Sized + 'static {
     }
 
     async fn fail(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Failing minion {}", Address::<Self>::new());
+        tracing::debug!("Failing minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Failed);
         self.stop().await?;
         Ok(())

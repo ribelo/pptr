@@ -4,7 +4,7 @@
 use minion::LifecycleStatus;
 use thiserror::Error;
 
-mod address;
+pub mod address;
 pub mod context;
 pub mod gru;
 pub mod message;

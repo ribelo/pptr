@@ -129,7 +129,9 @@ pub(crate) async fn run_minion_loop<A>(
     }
 }
 
-fn create_minion_entities<A>(minion: &MinionStruct<A>) -> (MinionHandle<A>, MinionInstance<A>)
+fn create_minion_entities<A>(
+    minion: &MinionStruct<A>,
+) -> (MinionHandle<A>, MinionInstance<A>, Address<A>)
 where
     A: Minion,
 {
@@ -143,12 +145,20 @@ where
         rx: Mailbox::new(rx),
         command_rx: Mailbox::new(command_rx),
     };
+    let tx = Postman::new(tx);
+    let command_tx = Postman::new(command_tx);
     let instance = MinionInstance {
         status_tx,
-        tx: Postman::new(tx),
-        command_tx: Postman::new(command_tx),
+        tx: tx.clone(),
+        command_tx: command_tx.clone(),
     };
-    (handler, instance)
+    let address = Address {
+        id: TypeId::of::<A>().into(),
+        name: type_name::<A>().to_string(),
+        tx,
+        command_tx,
+    };
+    (handler, instance, address)
 }
 
 pub fn spawn<A>(minion: impl Into<MinionStruct<A>>) -> Result<Address<A>, MinionsError>
@@ -156,11 +166,12 @@ where
     A: Minion,
 {
     let minion = minion.into();
-    let address = Address::<A>::new();
     if instance_exists::<A>() {
-        Err(MinionsError::MinionAlreadyExists(address.name))
+        Err(MinionsError::MinionAlreadyExists(
+            type_name::<A>().to_string(),
+        ))
     } else {
-        let (handle, instance) = create_minion_entities(&minion);
+        let (handle, instance, address) = create_minion_entities(&minion);
         GRU.actors
             .write()
             .expect("Failed to acquire write lock")

@@ -5,6 +5,7 @@ use std::{
 
 use crate::{
     gru::send,
+    message::{Message, Postman, ServiceCommand},
     minion::{Minion, MinionId},
     MinionsError,
 };
@@ -15,7 +16,8 @@ where
 {
     pub id: MinionId,
     pub name: String,
-    _phantom: std::marker::PhantomData<A>,
+    pub(crate) tx: Postman<A::Msg>,
+    pub(crate) command_tx: Postman<ServiceCommand>,
 }
 
 impl<A> Clone for Address<A>
@@ -26,7 +28,8 @@ where
         Self {
             id: self.id,
             name: self.name.clone(),
-            _phantom: std::marker::PhantomData::<A>,
+            tx: self.tx.clone(),
+            command_tx: self.command_tx.clone(),
         }
     }
 }
@@ -45,26 +48,15 @@ impl<A: Minion> PartialOrd for Address<A> {
     }
 }
 
-impl<A: Minion> std::default::Default for Address<A> {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<A: Minion> Address<A> {
-    pub fn new() -> Self
-    where
-        A: Minion,
-    {
-        Self {
-            id: TypeId::of::<A>().into(),
-            name: type_name::<A>().to_string(),
-            _phantom: std::marker::PhantomData::<A>,
-        }
+    pub async fn send(&self, message: impl Into<A::Msg>) -> Result<(), MinionsError> {
+        self.tx.send(message.into()).await
     }
-
-    pub async fn send(message: impl Into<A::Msg>) -> Result<(), MinionsError> {
-        send::<A>(message.into()).await
+    pub async fn ask(
+        &self,
+        message: impl Into<A::Msg>,
+    ) -> Result<<A::Msg as Message>::Response, MinionsError> {
+        self.tx.send_and_await_response(message.into()).await
     }
 }
 
