@@ -69,6 +69,7 @@ where
         Self { tx }
     }
 
+    #[inline(always)]
     pub async fn send(&self, message: M) -> Result<(), MinionsError> {
         let packet = Packet {
             message,
@@ -81,6 +82,7 @@ where
         Ok(())
     }
 
+    #[inline(always)]
     pub async fn send_and_await_response(&self, message: M) -> Result<M::Response, MinionsError> {
         let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<M::Response, MinionsError>>();
 

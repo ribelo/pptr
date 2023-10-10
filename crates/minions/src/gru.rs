@@ -43,6 +43,7 @@ where
     }
 }
 
+#[inline(always)]
 pub fn get_status<A>() -> Option<LifecycleStatus>
 where
     A: Minion,
@@ -56,6 +57,7 @@ where
         .map(|instance| *instance.status_tx.borrow())
 }
 
+#[inline(always)]
 pub fn set_status<A>(status: LifecycleStatus)
 where
     A: Minion,
@@ -79,6 +81,7 @@ where
     }
 }
 
+#[inline(always)]
 pub fn instance_exists<A>() -> bool
 where
     A: Minion,
@@ -161,6 +164,7 @@ where
     (handler, instance, address)
 }
 
+#[inline(always)]
 pub fn spawn<A>(minion: impl Into<MinionStruct<A>>) -> Result<Address<A>, MinionsError>
 where
     A: Minion,
@@ -181,6 +185,44 @@ where
     }
 }
 
+pub async fn terminate<A>() -> Result<(), MinionsError>
+where
+    A: Minion,
+{
+    if instance_exists::<A>() {
+        let minion_id: MinionId = TypeId::of::<A>().into();
+        control::<A>(ServiceCommand::Stop).await?;
+        GRU.actors
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&minion_id);
+        Ok(())
+    } else {
+        Err(MinionsError::MinionDoesNotExist(
+            type_name::<A>().to_string(),
+        ))
+    }
+}
+
+pub async fn kill<A>() -> Result<(), MinionsError>
+where
+    A: Minion,
+{
+    if instance_exists::<A>() {
+        let minion_id: MinionId = TypeId::of::<A>().into();
+        GRU.actors
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&minion_id);
+        Ok(())
+    } else {
+        Err(MinionsError::MinionDoesNotExist(
+            type_name::<A>().to_string(),
+        ))
+    }
+}
+
+#[inline(always)]
 pub async fn send<A>(message: impl Into<A::Msg>) -> Result<(), MinionsError>
 where
     A: Minion,
@@ -201,6 +243,7 @@ where
     }
 }
 
+#[inline(always)]
 pub async fn ask<A>(
     message: impl Into<A::Msg>,
 ) -> Result<<A::Msg as Message>::Response, MinionsError>
@@ -224,6 +267,7 @@ where
     }
 }
 
+#[inline(always)]
 pub async fn control<A>(command: ServiceCommand) -> Result<(), MinionsError>
 where
     A: Minion,

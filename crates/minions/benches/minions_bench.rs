@@ -3,9 +3,9 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use minions::{
     address::Address,
     context::{with_context, with_context_mut},
-    gru::{ask, instance_exists, send, spawn},
+    gru::{ask, instance_exists, kill, send, spawn, terminate},
     message::Message,
-    minion::Minion,
+    minion::{Minion, MinionStruct},
 };
 use minions_derive::Message;
 
@@ -28,35 +28,75 @@ impl Minion for PingActor {
 
 fn benchmarks(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
-    let mut ping_address: Option<Address<_>> = None; // Zakładam, że znasz typ `YourAddressType`
-    runtime.block_on(async {
-        ping_address = Some(spawn(PingActor { count: 10 }).unwrap());
-    });
     c.bench_function("minion send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
+                let actor = MinionStruct::new(PingActor { count: 10 });
+                let _address = spawn(actor).unwrap();
                 for _ in 0..100_000 {
                     send::<PingActor>(PingMessage(10)).await.unwrap();
                 }
+                kill::<PingActor>().await.unwrap();
             })
         })
     });
     c.bench_function("minion address send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let address = ping_address.as_ref().unwrap();
+                let actor = MinionStruct::new(PingActor { count: 10 });
+                let address = spawn(actor).unwrap();
                 for _ in 0..100_000 {
                     address.send(PingMessage(10)).await.unwrap();
                 }
+                kill::<PingActor>().await.unwrap();
             })
         })
     });
     c.bench_function("minion ask ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
+                let actor = MinionStruct::new(PingActor { count: 10 });
+                let _address = spawn(actor).unwrap();
                 for _ in 0..100_000 {
                     let _res = ask::<PingActor>(PingMessage(10)).await;
                 }
+                kill::<PingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion ask ping 1e5 bounded 1", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(PingActor { count: 10 }).with_buffer_size(1);
+                let _address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    let _res = ask::<PingActor>(PingMessage(10)).await;
+                }
+                kill::<PingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion ask ping 1e5 bounded 10", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(PingActor { count: 10 }).with_buffer_size(10);
+                let _address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    let _res = ask::<PingActor>(PingMessage(10)).await;
+                }
+                kill::<PingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion ask ping 1e5 bounded 1e5", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(PingActor { count: 10 }).with_buffer_size(100_000);
+                let _address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    let _res = ask::<PingActor>(PingMessage(10)).await;
+                }
+                kill::<PingActor>().await.unwrap();
             })
         })
     });

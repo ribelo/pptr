@@ -77,22 +77,27 @@ impl std::hash::Hash for MinionId {
 pub trait Minion: Send + Sized + 'static {
     type Msg: Message + Clone;
 
+    #[inline(always)]
     async fn pre_start(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
+    #[inline(always)]
     async fn post_start(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
+    #[inline(always)]
     async fn pre_stop(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
+    #[inline(always)]
     async fn post_stop(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
+    #[inline(always)]
     async fn start(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Starting minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Activating);
@@ -102,6 +107,7 @@ pub trait Minion: Send + Sized + 'static {
         Ok(())
     }
 
+    #[inline(always)]
     async fn stop(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Stopping minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Deactivating);
@@ -111,6 +117,7 @@ pub trait Minion: Send + Sized + 'static {
         Ok(())
     }
 
+    #[inline(always)]
     async fn restart(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Restarting minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Restarting);
@@ -119,6 +126,7 @@ pub trait Minion: Send + Sized + 'static {
         Ok(())
     }
 
+    #[inline(always)]
     async fn fail(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Failing minion {}", type_name::<Self>());
         set_status::<Self>(LifecycleStatus::Failed);
@@ -128,6 +136,7 @@ pub trait Minion: Send + Sized + 'static {
 
     async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response;
 
+    #[inline(always)]
     async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), MinionsError> {
         match cmd {
             ServiceCommand::Start => self.start().await,

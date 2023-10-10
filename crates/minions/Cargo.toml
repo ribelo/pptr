@@ -30,6 +30,10 @@ name = "minions_bench"
 harness = false
 
 [[bench]]
+name = "tokio_bench"
+harness = false
+
+[[bench]]
 name = "actix_bench"
 harness = false
 
