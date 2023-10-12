@@ -1,4 +1,7 @@
-use std::fmt::Debug;
+use std::{
+    fmt::Debug,
+    ops::{Deref, DerefMut},
+};
 
 use minions_derive::Message;
 use thiserror::Error;
@@ -8,6 +11,21 @@ use crate::MinionsError;
 
 pub trait Message: Send {
     type Response: Send + 'static;
+}
+
+pub struct Msg<T>(pub T);
+
+impl<T: Message> Deref for Msg<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<T: Message> DerefMut for Msg<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
 }
 
 #[derive(Debug, Clone, Message, strum::Display)]
