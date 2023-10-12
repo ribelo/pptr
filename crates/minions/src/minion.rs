@@ -1,18 +1,14 @@
 use std::{
-    any::{type_name, TypeId},
-    fmt::{self},
-    hash::{Hash, Hasher},
+    any::{type_name, Any},
     sync::OnceLock,
 };
 
-use ahash::AHasher;
 use async_trait::async_trait;
-use tokio::sync::watch;
 
 use crate::{
     address::Address,
     gru::{self, set_status},
-    message::{Mailbox, Message, Postman, ServiceCommand},
+    message::{Mailbox, Message, ServiceCommand},
     MinionsError,
 };
 
@@ -46,36 +42,44 @@ impl LifecycleStatus {
 
 impl Copy for LifecycleStatus {}
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
-pub struct MinionId {
-    hash: u64,
-}
+pub struct BoxedAny(Box<dyn Any + Send + Sync>);
 
-impl fmt::Display for MinionId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "MinionId({})", self.hash)
+impl BoxedAny {
+    pub fn new<A>(minion: A) -> Self
+    where
+        A: Any + Send + Sync,
+    {
+        Self(Box::new(minion))
+    }
+
+    pub fn downcast<T>(&self) -> &T
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        unsafe { self.0.downcast_ref_unchecked::<T>() }
     }
 }
 
-impl From<TypeId> for MinionId {
-    fn from(value: TypeId) -> Self {
-        let mut hasher = AHasher::default();
-        value.hash(&mut hasher);
-        MinionId {
-            hash: hasher.finish(),
-        }
+pub struct Sequential {}
+pub struct Parallel {}
+pub trait ExecutionModel {
+    fn is_parallel() -> bool;
+}
+impl ExecutionModel for Sequential {
+    fn is_parallel() -> bool {
+        false
     }
 }
-
-impl std::hash::Hash for MinionId {
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        state.write_u64(self.hash);
+impl ExecutionModel for Parallel {
+    fn is_parallel() -> bool {
+        true
     }
 }
 
 #[async_trait]
-pub trait Minion: Send + Sized + 'static {
+pub trait Minion: Send + Sync + Sized + Clone + 'static {
     type Msg: Message + Clone;
+    type Execution: ExecutionModel;
 
     #[inline(always)]
     async fn pre_start(&mut self) -> Result<(), MinionsError> {
@@ -151,18 +155,8 @@ pub(crate) struct MinionHandle<A>
 where
     A: Minion,
 {
-    pub status_rx: watch::Receiver<LifecycleStatus>,
     pub(crate) rx: Mailbox<A::Msg>,
     pub(crate) command_rx: Mailbox<ServiceCommand>,
-}
-
-pub struct MinionInstance<A>
-where
-    A: Minion,
-{
-    pub status_tx: watch::Sender<LifecycleStatus>,
-    pub(crate) tx: Postman<A::Msg>,
-    pub(crate) command_tx: Postman<ServiceCommand>,
 }
 
 pub struct MinionStruct<A: Minion> {

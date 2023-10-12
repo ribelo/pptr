@@ -6,15 +6,15 @@ use std::{
 use crate::{
     gru::send,
     message::{Message, Postman, ServiceCommand},
-    minion::{Minion, MinionId},
-    MinionsError,
+    minion::Minion,
+    Id, MinionsError,
 };
 
 pub struct Address<A>
 where
     A: Minion,
 {
-    pub id: MinionId,
+    pub id: Id,
     pub name: String,
     pub(crate) tx: Postman<A::Msg>,
     pub(crate) command_tx: Postman<ServiceCommand>,

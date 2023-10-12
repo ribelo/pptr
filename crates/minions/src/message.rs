@@ -99,7 +99,7 @@ where
         match res_rx.await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(err)) => Err(err),
-            Err(_) => Err(MinionsError::MessageResponseReceiveError),
+            Err(err) => Err(MinionsError::MessageResponseReceiveError),
         }
     }
 }
