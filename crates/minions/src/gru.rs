@@ -21,6 +21,7 @@ pub struct Gru {
     pub(crate) status: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
     pub(crate) address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
     pub(crate) context: Arc<RwLock<HashMap<Id, Box<dyn Any + Send + Sync>>>>,
+    pub(crate) resources: Arc<RwLock<HashMap<Id, BoxedAny>>>,
 }
 
 impl Gru {

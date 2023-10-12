@@ -1,5 +1,7 @@
 #![feature(lazy_cell)]
 #![feature(downcast_unchecked)]
+#![feature(async_fn_in_trait)]
+#![feature(return_position_impl_trait_in_trait)]
 
 use std::{
     any::TypeId,
@@ -14,8 +16,10 @@ use thiserror::Error;
 pub mod address;
 pub mod context;
 pub mod gru;
+mod magic_handler;
 pub mod message;
 pub mod minion;
+mod resources;
 
 #[derive(Debug, Error)]
 pub enum MinionsError {

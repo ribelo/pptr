@@ -137,7 +137,7 @@ fn benchmarks(c: &mut Criterion) {
                 for _ in 0..100_000 {
                     let _res = address.ask(PingMessage(10)).await;
                 }
-                kill::<PingActor>().await.unwrap();
+                kill::<ParallelPingActor>().await.unwrap();
             })
         })
     });
