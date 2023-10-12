@@ -13,6 +13,7 @@ pub trait Message: Send {
     type Response: Send + 'static;
 }
 
+#[derive(Debug, Clone)]
 pub struct Msg<T>(pub T);
 
 impl<T: Message> Deref for Msg<T> {

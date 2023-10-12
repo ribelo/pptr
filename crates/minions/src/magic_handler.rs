@@ -19,36 +19,37 @@ pub trait ConstructFrom<U> {
         Self: Sized;
 }
 
-pub trait Handler<U, T> {
-    fn call(self, context: &mut U);
+pub trait Handler<M, U, T> {
+    fn call(self, msg: M, context: &mut U);
 }
 
 #[async_trait]
-pub trait AsyncHandler<U, T> {
-    async fn async_call(self, context: &mut U);
+pub trait AsyncHandler<M, U, T> {
+    async fn async_call(self, msg: M, context: &mut U);
 }
 
 macro_rules! tuple_impls {
     ($($t:ident),*) => {
-        impl<U, $($t),*, F> Handler<U, ($($t,)*)> for F
+        impl<M, U, $($t),*, F> Handler<M, U, ($($t,)*)> for F
         where
-            F: Fn($($t),*),
+            F: Fn(M, $($t),*),
             $($t: ConstructFrom<U>,)*
         {
-            fn call(self, from: &mut U) {
-                (self)($(<$t>::construct(from),)*); // używam unwrap() założywszy, że chcesz to zrobić
+            fn call(self, msg: M, from: &mut U) {
+                (self)(msg, $(<$t>::construct(from),)*); // używam unwrap() założywszy, że chcesz to zrobić
             }
         }
         #[async_trait]
-        impl<U, $($t),*, F, Fut> AsyncHandler<U, ($($t,)*)> for F
+        impl<M, U, $($t),*, F, Fut> AsyncHandler<M, U, ($($t,)*)> for F
         where
+            M: 'static + Send,
             U: Send,
-            F: Fn($($t),*) -> Fut + Send,
+            F: Fn(M, $($t),*) -> Fut + Send,
             $($t: ConstructFrom<U>,)*
             Fut: Future<Output = ()> + Send,
         {
-            async fn async_call(self, from: &mut U) {
-                (self)($(<$t>::construct(from),)*).await;
+            async fn async_call(self, msg: M, from: &mut U) {
+                (self)(msg, $(<$t>::construct(from),)*).await;
             }
         }
     }
@@ -73,18 +74,18 @@ impl_handler!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10);
 impl_handler!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11);
 impl_handler!(T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12);
 
-pub fn trigger<U, T, H>(from: &mut U, handler: H)
+pub fn trigger<M, U, T, H>(msg: M, from: &mut U, handler: H)
 where
-    H: Handler<U, T>,
+    H: Handler<M, U, T>,
 {
-    handler.call(from);
+    handler.call(msg, from);
 }
 
-pub async fn async_trigger<U, T, H>(from: &mut U, handler: H)
+pub async fn async_trigger<M, U, T, H>(msg: M, from: &mut U, handler: H)
 where
-    H: AsyncHandler<U, T>,
+    H: AsyncHandler<M, U, T>,
 {
-    handler.async_call(from).await;
+    handler.async_call(msg, from).await;
 }
 
 pub struct Context {
@@ -110,7 +111,7 @@ impl ConstructFrom<Context> for Res<f32> {
     }
 }
 
-#[derive(Clone, Default, Message)]
+#[derive(Clone, Debug, Default, Message)]
 pub struct SomeMessage {}
 
 pub struct SomeStruct {}
@@ -124,12 +125,18 @@ impl<T: Default> ConstructFrom<Context> for Msg<T> {
     }
 }
 
-#[message_handler]
+#[message_handler(Context)]
 impl SomeStruct {
-    pub fn handle(self, a: Res<i32>, b: Res<f32>) {
-        println!("SomeStruct {:#?} {:#?}", a, b.is_some());
+    pub fn handle(self, msg: SomeMessage, a: Res<i32>, b: Res<f32>) {
+        println!("SomeStruct {:#?} {:#?} {:#?}", msg, a, b.is_some());
     }
 }
+
+// impl Handler<SomeMessage, Context, (Res<i32>, Res<f32>)> for SomeStruct {
+//     fn call(self, msg: SomeMessage, from: &mut Context) {
+//         self.handle(msg, Res::construct(from), Res::construct(from));
+//     }
+// }
 
 // #[async_trait]
 // impl AsyncHandler<Context, (Res<i32>, Res<f32>)> for SomeStruct {
@@ -159,6 +166,6 @@ mod tests {
         //     println!("a: {:#?}, b: {:#?}", a, b);
         // }
         // trigger(&mut context, print_res);
-        trigger(&mut context, some_struct);
+        trigger(SomeMessage {}, &mut context, some_struct);
     }
 }

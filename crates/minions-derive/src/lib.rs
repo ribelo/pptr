@@ -48,5 +48,5 @@ pub fn async_message_handler(
         syn::parse(attr).unwrap_or(syn::parse_str("Gru").expect("Failed to parse context type"));
     // Parsing the input token stream into a syntax tree node representing an item implementation
     let ast: syn::ItemImpl = syn::parse(item.clone()).expect("Failed to parse input");
-    magic_handler::expand_async(&ast).into()
+    magic_handler::expand_async(context_type, &ast).into()
 }
