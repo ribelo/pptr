@@ -20,8 +20,7 @@ pub struct Gru {
     pub(crate) minion: Arc<RwLock<HashMap<Id, BoxedAny>>>,
     pub(crate) status: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
     pub(crate) address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
-    pub(crate) context: Arc<RwLock<HashMap<Id, Box<dyn Any + Send + Sync>>>>,
-    pub(crate) resources: Arc<RwLock<HashMap<Id, BoxedAny>>>,
+    pub(crate) context: Arc<RwLock<HashMap<Id, BoxedAny>>>,
 }
 
 impl Gru {
@@ -252,7 +251,7 @@ pub(crate) async fn run_minion_loop<A>(
             }
             Some(Packet { message, reply_address }) = handle.rx.recv() => {
                 if status.should_handle_message() {
-                    if A::Execution::is_parallel() {
+                    if A::Execution {
                         let mut cloned_minion = minion.clone();
                         let cloned_address = address.clone();
                         tokio::spawn(async move {
@@ -309,7 +308,10 @@ mod tests {
 
     // use crate::context::provide_context;
 
-    use crate::minion;
+    use crate::{
+        context::{provide_context, with_context_async},
+        minion,
+    };
 
     use super::*;
 
@@ -360,11 +362,15 @@ mod tests {
             async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response {
                 println!("SleepActor Received message: {:?}", msg);
                 tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
+                with_context_async(|i: Option<i32>| async {
+                    i += 1;
+                })
+                .await;
                 msg.i
             }
         }
 
-        // provide_context::<i32>(0);
+        provide_context::<i32>(0);
         spawn(TestActor { i: 0 }).unwrap();
         spawn(SleepActor { i: 0 }).unwrap();
         let mut set = tokio::task::JoinSet::new();

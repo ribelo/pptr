@@ -1,14 +1,16 @@
+use core::fmt;
 use std::{
     any::{type_name, Any},
     sync::OnceLock,
 };
 
 use async_trait::async_trait;
+use tokio::sync::oneshot;
 
 use crate::{
     address::Address,
     gru::{self, set_status},
-    message::{Mailbox, Message, ServiceCommand},
+    message::{Mailbox, MaybeReplyAddress, Message, MessageResponse, Packet, ServiceCommand},
     MinionsError,
 };
 
@@ -60,26 +62,20 @@ impl BoxedAny {
     }
 }
 
-pub struct Sequential {}
-pub struct Parallel {}
-pub trait ExecutionModel {
-    fn is_parallel() -> bool;
-}
-impl ExecutionModel for Sequential {
-    fn is_parallel() -> bool {
-        false
-    }
-}
-impl ExecutionModel for Parallel {
-    fn is_parallel() -> bool {
-        true
-    }
+pub enum ExecutionType {
+    Sequential,
+    Concurrent,
+    Parallel,
 }
 
 #[async_trait]
 pub trait Minion: Send + Sync + Sized + Clone + 'static {
     type Msg: Message + Clone;
-    type Execution: ExecutionModel;
+    type Execution = ExecutionType;
+
+    fn name(&self) -> &'static str {
+        type_name::<Self>()
+    }
 
     #[inline(always)]
     async fn pre_start(&mut self) -> Result<(), MinionsError> {
@@ -103,7 +99,7 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
 
     #[inline(always)]
     async fn start(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Starting minion {}", type_name::<Self>());
+        tracing::debug!("Starting minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Activating);
         self.pre_start().await?;
         set_status::<Self>(LifecycleStatus::Active);
@@ -113,7 +109,7 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
 
     #[inline(always)]
     async fn stop(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Stopping minion {}", type_name::<Self>());
+        tracing::debug!("Stopping minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Deactivating);
         self.pre_stop().await?;
         set_status::<Self>(LifecycleStatus::Inactive);
@@ -123,7 +119,7 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
 
     #[inline(always)]
     async fn restart(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Restarting minion {}", type_name::<Self>());
+        tracing::debug!("Restarting minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Restarting);
         self.stop().await?;
         self.start().await?;
@@ -132,13 +128,11 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
 
     #[inline(always)]
     async fn fail(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Failing minion {}", type_name::<Self>());
+        tracing::debug!("Failing minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Failed);
         self.stop().await?;
         Ok(())
     }
-
-    async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response;
 
     #[inline(always)]
     async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), MinionsError> {
@@ -149,6 +143,8 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
             ServiceCommand::Terminate => self.fail().await,
         }
     }
+
+    async fn handle_message(&mut self, msg: Self::Msg) -> MessageResponse<Self::Msg>;
 }
 
 pub(crate) struct MinionHandle<A>

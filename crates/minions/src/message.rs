@@ -39,27 +39,13 @@ pub enum ServiceCommand {
 
 impl Copy for ServiceCommand {}
 
-#[derive(Debug, Error)]
-pub enum MessageBuilderError {
-    #[error("Missing message")]
-    MissingMessage,
-    #[error("Missing sender")]
-    MissingSender,
-    #[error("Missing recipient")]
-    MissingRecipient,
-}
-
-#[derive(Debug, Error)]
-pub enum PacketError {
-    #[error("Missing envelope")]
-    MissingEnvelope,
-    #[error("Invalid envelope")]
-    InvalidEnvelope,
-}
+pub type ReplyAddress<T> = oneshot::Sender<Result<T, MinionsError>>;
+pub type MaybeReplyAddress<T> = Option<ReplyAddress<T>>;
+pub type MessageResponse<T> = <T as Message>::Response;
 
 pub(crate) struct Packet<M: Message> {
     pub message: M,
-    pub(crate) reply_address: Option<oneshot::Sender<Result<M::Response, MinionsError>>>,
+    pub(crate) reply_address: MaybeReplyAddress<M::Response>,
 }
 
 pub(crate) struct Postman<M>
@@ -118,7 +104,7 @@ where
         match res_rx.await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(err)) => Err(err),
-            Err(err) => Err(MinionsError::MessageResponseReceiveError),
+            Err(_) => Err(MinionsError::MessageResponseReceiveError),
         }
     }
 }
