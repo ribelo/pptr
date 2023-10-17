@@ -4,12 +4,13 @@ use std::{
 };
 
 use hashbrown::HashMap;
+use minions_derive::Minion;
 use tokio::sync::mpsc;
 
 use crate::{
     address::Address,
     message::{Mailbox, Message, Packet, Postman, ServiceCommand},
-    minion::{BoxedAny, ExecutionModel, LifecycleStatus, Minion, MinionHandle, MinionStruct},
+    minion::{BoxedAny, Execution, LifecycleStatus, Minion, MinionHandle, MinionStruct},
     Id, MinionsError,
 };
 
@@ -17,7 +18,6 @@ pub static GRU: LazyLock<Gru> = LazyLock::new(Gru::new);
 
 #[derive(Clone, Default)]
 pub struct Gru {
-    pub(crate) minion: Arc<RwLock<HashMap<Id, BoxedAny>>>,
     pub(crate) status: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
     pub(crate) address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
     pub(crate) context: Arc<RwLock<HashMap<Id, BoxedAny>>>,
@@ -33,7 +33,7 @@ impl Gru {
         A: Minion,
     {
         let id: Id = TypeId::of::<A>().into();
-        self.minion
+        self.address
             .read()
             .expect("Failed to acquire read lock")
             .contains_key(&id)
@@ -181,7 +181,7 @@ impl Gru {
     {
         if let Some(address) = self.get_address::<A>() {
             self.send_command::<A>(ServiceCommand::Terminate).await?;
-            self.minion
+            self.address
                 .write()
                 .expect("Failed to acquire write lock")
                 .remove(&address.id);
@@ -234,6 +234,8 @@ pub(crate) async fn run_minion_loop<A>(
         .await
         .unwrap_or_else(|err| panic!("Minion {} failed to start. Err: {}", address, err));
 
+    let execution_variant = Execution::ExecutionVariant::from_type::<A::Exec>();
+
     loop {
         let Some(status) = get_status::<A>() else {
             break;
@@ -251,20 +253,25 @@ pub(crate) async fn run_minion_loop<A>(
             }
             Some(Packet { message, reply_address }) = handle.rx.recv() => {
                 if status.should_handle_message() {
-                    if A::Execution {
-                        let mut cloned_minion = minion.clone();
-                        let cloned_address = address.clone();
-                        tokio::spawn(async move {
-                            let response = cloned_minion.handle_message(message).await;
+                    use Execution::ExecutionVariant as E;
+                    match execution_variant {
+                        E::Sequential => {
+                            let response = minion.handle_message(message).await;
                             if let Some(tx) = reply_address {
-                                tx.send(Ok(response)).unwrap_or_else(|_| panic!("Minion {} failed to send response", cloned_address));
+                                tx.send(Ok(response)).unwrap_or_else(|_| panic!("Minion {} failed to send response", address));
                             }
-                        });
-                    } else {
-                        let response = minion.handle_message(message).await;
-                        if let Some(tx) = reply_address {
-                            tx.send(Ok(response)).unwrap_or_else(|_| panic!("Minion {} failed to send response", address));
-                        }
+                        },
+                        E::Concurrent => {
+                            let mut cloned_minion = minion.clone();
+                            let cloned_address = address.clone();
+                            tokio::spawn(async move {
+                                let response = cloned_minion.handle_message(message).await;
+                                if let Some(tx) = reply_address {
+                                    tx.send(Ok(response)).unwrap_or_else(|_| panic!("Minion {} failed to send response", cloned_address));
+                                }
+                            });
+                        },
+                        E::Parallel => todo!(),
                     }
                 } else if status.should_drop_message() {
                     if let Some(tx) = reply_address {
@@ -304,13 +311,13 @@ where
 mod tests {
 
     use async_trait::async_trait;
-    use minions_derive::Message;
+    use minions_derive::{Message, Minion};
 
     // use crate::context::provide_context;
 
     use crate::{
         context::{provide_context, with_context_async},
-        minion,
+        minion::{self},
     };
 
     use super::*;
@@ -328,22 +335,6 @@ mod tests {
             i: i32,
         }
 
-        #[async_trait]
-        impl Minion for TestActor {
-            type Msg = TestMessage;
-            type Execution = minion::Sequential;
-            async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response {
-                println!("TestActor Received message: {:?}", msg);
-                tokio::time::sleep(std::time::Duration::from_millis(1000)).await;
-                // with_context(|ctx: Option<i32>| async move {
-                //     println!("Context: {:?}", ctx);
-                // })
-                // .await;
-                // send::<Self>(TestMessage { i: msg.i + 1 }).await.unwrap();
-                msg.i
-            }
-        }
-
         #[derive(Debug, Clone, Message)]
         #[message(response = i32)]
         pub struct SleepMessage {
@@ -358,20 +349,15 @@ mod tests {
         #[async_trait]
         impl Minion for SleepActor {
             type Msg = SleepMessage;
-            type Execution = minion::Parallel;
+            type Exec = Execution::Concurrent;
             async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response {
                 println!("SleepActor Received message: {:?}", msg);
                 tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
-                with_context_async(|i: Option<i32>| async {
-                    i += 1;
-                })
-                .await;
                 msg.i
             }
         }
 
         provide_context::<i32>(0);
-        spawn(TestActor { i: 0 }).unwrap();
         spawn(SleepActor { i: 0 }).unwrap();
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..10 {

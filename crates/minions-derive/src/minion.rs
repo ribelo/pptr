@@ -1,55 +1,58 @@
-use proc_macro2::{Ident, Span, TokenStream};
+use darling::FromDeriveInput;
+use proc_macro2::TokenStream;
 use quote::quote;
-use syn::{parse_str, Field, FieldMutability, ItemStruct, Token, Type, Visibility};
+use syn::DeriveInput;
 
-pub fn expand(ast: &mut ItemStruct) -> TokenStream {
-    let address_ty: Type = parse_str("minion::Address").unwrap();
-    let status_ty: Type = parse_str("Arc<std::sync::Mutex<minion::LifecycleStatus>>").unwrap();
-    let tx_ty: Type = parse_str("minion::Postman<<Self as minion::Minion>::Msg>").unwrap();
-    let gru_ty: Type = parse_str("Gru").unwrap();
+#[derive(Default, Debug, FromDeriveInput)]
+#[darling(default, attributes(minion))]
+struct MinionOpts {
+    name: Option<String>,
+    execution: Option<syn::Path>,
+}
 
-    let new_fields = match ast.fields {
-        syn::Fields::Named(ref mut fields) => &mut fields.named,
-        _ => panic!("Minion struct must have named fields"),
+pub fn expand(ast: &DeriveInput) -> TokenStream {
+    let name = &ast.ident;
+    let opts = match MinionOpts::from_derive_input(ast) {
+        Ok(opts) => opts,
+        Err(e) => {
+            let error_message = format!("Macro derivation failed: {}", e);
+            return quote! {
+                compile_error!(#error_message);
+            };
+        }
     };
 
-    new_fields.push(Field {
-        ident: Some(Ident::new("_address", Span::call_site())),
-        vis: Visibility::Inherited,
-        mutability: FieldMutability::None,
-        attrs: vec![],
-        ty: address_ty,
-        colon_token: Some(Token![:](Span::call_site())),
-    });
+    let minion_name = match &opts.name {
+        Some(name) => {
+            quote! { #name }
+        }
+        None => quote! { type_name::<Self>().to_string() },
+    };
+    let execution_type = match &opts.execution {
+        Some(execution) => {
+            let execution_type = {
+                syn::Type::Path(syn::TypePath {
+                    qself: None,
+                    path: execution.clone(),
+                })
+            };
+            quote! { #execution_type }
+        }
+        None => quote! { ExecutionType::Sequential },
+    };
 
-    new_fields.push(Field {
-        ident: Some(Ident::new("_status", Span::call_site())),
-        vis: Visibility::Inherited,
-        mutability: FieldMutability::None,
-        attrs: vec![],
-        ty: status_ty,
-        colon_token: Some(Token![:](Span::call_site())),
-    });
+    let gen = quote! {
+        impl MinionConfig for #name {
 
-    new_fields.push(Field {
-        ident: Some(Ident::new("_tx", Span::call_site())),
-        vis: Visibility::Inherited,
-        mutability: FieldMutability::None,
-        attrs: vec![],
-        ty: tx_ty,
-        colon_token: Some(Token![:](Span::call_site())),
-    });
+            fn name(&self) -> String {
+                #minion_name
+            }
 
-    new_fields.push(Field {
-        ident: Some(Ident::new("_gru", Span::call_site())),
-        vis: Visibility::Inherited,
-        mutability: FieldMutability::None,
-        attrs: vec![],
-        ty: gru_ty,
-        colon_token: Some(Token![:](Span::call_site())),
-    });
+            fn execution_type(&self) -> ExecutionType {
+                #execution_type
+            }
+        }
+    };
 
-    quote! {
-        #ast
-    }
+    gen
 }

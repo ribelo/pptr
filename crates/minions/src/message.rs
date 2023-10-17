@@ -42,6 +42,7 @@ impl Copy for ServiceCommand {}
 pub type ReplyAddress<T> = oneshot::Sender<Result<T, MinionsError>>;
 pub type MaybeReplyAddress<T> = Option<ReplyAddress<T>>;
 pub type MessageResponse<T> = <T as Message>::Response;
+pub type MinionMessageResponse<M> = MessageResponse<<M as Message>::Response>;
 
 pub(crate) struct Packet<M: Message> {
     pub message: M,

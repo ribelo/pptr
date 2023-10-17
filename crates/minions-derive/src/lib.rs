@@ -19,8 +19,8 @@ pub fn log_error_derive(input: TokenStream) -> TokenStream {
     log_error::expand(&ast).into()
 }
 
-#[proc_macro_attribute]
-pub fn minion(_attrs: TokenStream, input: TokenStream) -> TokenStream {
-    let mut ast = parse_macro_input!(input as ItemStruct);
-    minion::expand(&mut ast).into()
+#[proc_macro_derive(Minion, attributes(minion))]
+pub fn minion(input: TokenStream) -> TokenStream {
+    let ast = parse_macro_input!(input as DeriveInput);
+    minion::expand(&ast).into()
 }

@@ -5,7 +5,7 @@ use minions::{
     // context::{with_context, with_context_mut},
     gru::{ask, kill, minion_exists, send, spawn, stop},
     message::Message,
-    minion::{self, Minion, MinionStruct},
+    minion::{self, MinionStruct, MinionVariant},
 };
 use minions_derive::Message;
 
@@ -24,7 +24,7 @@ struct ParallelPingActor {
 }
 
 #[async_trait]
-impl Minion for PingActor {
+impl MinionVariant for PingActor {
     type Msg = PingMessage;
     type Execution = minion::Sequential;
     async fn handle_message(&mut self, msg: PingMessage) -> usize {
@@ -34,7 +34,7 @@ impl Minion for PingActor {
 }
 
 #[async_trait]
-impl Minion for ParallelPingActor {
+impl MinionVariant for ParallelPingActor {
     type Msg = PingMessage;
     type Execution = minion::Parallel;
     async fn handle_message(&mut self, msg: PingMessage) -> usize {

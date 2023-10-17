@@ -1,6 +1,7 @@
 use core::fmt;
 use std::{
     any::{type_name, Any},
+    marker::PhantomData,
     sync::OnceLock,
 };
 
@@ -10,7 +11,10 @@ use tokio::sync::oneshot;
 use crate::{
     address::Address,
     gru::{self, set_status},
-    message::{Mailbox, MaybeReplyAddress, Message, MessageResponse, Packet, ServiceCommand},
+    message::{
+        Mailbox, MaybeReplyAddress, Message, MessageResponse, MinionMessageResponse, Packet,
+        ServiceCommand,
+    },
     MinionsError,
 };
 
@@ -62,42 +66,65 @@ impl BoxedAny {
     }
 }
 
-pub enum ExecutionType {
-    Sequential,
-    Concurrent,
-    Parallel,
+pub mod Execution {
+    use std::any::TypeId;
+
+    pub trait ExecutionType {}
+
+    pub struct Sequential;
+    pub struct Concurrent;
+    pub struct Parallel;
+
+    impl ExecutionType for Sequential {}
+    impl ExecutionType for Concurrent {}
+    impl ExecutionType for Parallel {}
+
+    pub enum ExecutionVariant {
+        Sequential,
+        Concurrent,
+        Parallel,
+    }
+
+    impl ExecutionVariant {
+        pub fn from_type<A: 'static>() -> Self {
+            if TypeId::of::<Sequential>() == TypeId::of::<A>() {
+                Self::Sequential
+            } else if TypeId::of::<Concurrent>() == TypeId::of::<A>() {
+                Self::Concurrent
+            } else if TypeId::of::<Parallel>() == TypeId::of::<A>() {
+                Self::Parallel
+            } else {
+                unreachable!()
+            }
+        }
+    }
 }
 
 #[async_trait]
 pub trait Minion: Send + Sync + Sized + Clone + 'static {
-    type Msg: Message + Clone;
-    type Execution = ExecutionType;
+    type Msg: Message;
+    type Exec: Execution::ExecutionType = Execution::Sequential;
 
-    fn name(&self) -> &'static str {
-        type_name::<Self>()
+    fn name(&self) -> String {
+        type_name::<Self>().to_string()
     }
 
-    #[inline(always)]
     async fn pre_start(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
-    #[inline(always)]
     async fn post_start(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
-    #[inline(always)]
     async fn pre_stop(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
-    #[inline(always)]
     async fn post_stop(&mut self) -> Result<(), MinionsError> {
         Ok(())
     }
 
-    #[inline(always)]
     async fn start(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Starting minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Activating);
@@ -107,7 +134,6 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
         Ok(())
     }
 
-    #[inline(always)]
     async fn stop(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Stopping minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Deactivating);
@@ -117,20 +143,22 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
         Ok(())
     }
 
-    #[inline(always)]
     async fn restart(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Restarting minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Restarting);
-        self.stop().await?;
-        self.start().await?;
+        self.pre_stop().await?;
+        self.post_stop().await?;
+        self.pre_start().await?;
+        self.post_start().await?;
+        set_status::<Self>(LifecycleStatus::Active);
         Ok(())
     }
 
-    #[inline(always)]
     async fn fail(&mut self) -> Result<(), MinionsError> {
         tracing::debug!("Failing minion {}", self.name());
         set_status::<Self>(LifecycleStatus::Failed);
-        self.stop().await?;
+        self.pre_stop().await?;
+        self.post_stop().await?;
         Ok(())
     }
 
@@ -143,14 +171,13 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
             ServiceCommand::Terminate => self.fail().await,
         }
     }
-
-    async fn handle_message(&mut self, msg: Self::Msg) -> MessageResponse<Self::Msg>;
+    async fn handle_message(
+        &mut self,
+        msg: <Self as Minion>::Msg,
+    ) -> <<Self as Minion>::Msg as Message>::Response;
 }
 
-pub(crate) struct MinionHandle<A>
-where
-    A: Minion,
-{
+pub(crate) struct MinionHandle<A: Minion> {
     pub(crate) rx: Mailbox<A::Msg>,
     pub(crate) command_rx: Mailbox<ServiceCommand>,
 }
