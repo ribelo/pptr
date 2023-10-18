@@ -4,7 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-minions-derive = { path = "minions-derive", optional = true }
+minions-derive = { path = "./minions-derive", optional = true }
+rayon = { version = "1.8.0", optional = true }
+pollster = { version = "0.3.0", optional = true }
 ahash = "0.8"
 async-trait = "0.1"
 hashbrown = "0.14"
@@ -12,12 +14,6 @@ strum = { version = "0.25", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1.32", features = ["full"] }
 tracing = "0.1"
-typed-builder = "0.16"
-chrono = "0.4.31"
-parking_lot = "0.12.1"
-dashmap = "5.5.3"
-rayon = "1.8.0"
-pollster = "0.3.0"
 
 [dev-dependencies]
 actix = "0.13.1"
@@ -28,6 +24,7 @@ coerce = "0.8.10"
 
 [features]
 derive = ["minions-derive"]
+rayon = ["dep:rayon", "dep:pollster"]
 
 [[bench]]
 name = "minions_bench"

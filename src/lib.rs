@@ -34,6 +34,8 @@ pub enum MinionsError {
     MessageReceiveError,
     #[error("Error receiving response from actor.")]
     MessageResponseReceiveError,
+    #[error("Error sending response.")]
+    MessageResponseSendError,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]

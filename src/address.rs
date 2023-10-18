@@ -1,8 +1,8 @@
 use std::fmt;
 
 use crate::{
-    message::{Message, Postman, ServiceCommand},
-    minion::Minion,
+    message::{Message, Postman, ServiceCommand, ServicePostman},
+    minion::{Handler, Minion},
     Id, MinionsError,
 };
 
@@ -12,8 +12,8 @@ where
 {
     pub id: Id,
     pub name: String,
-    pub(crate) tx: Postman<A::Msg>,
-    pub(crate) command_tx: Postman<ServiceCommand>,
+    pub(crate) tx: Postman<A>,
+    pub(crate) command_tx: ServicePostman,
 }
 
 impl<A> Clone for Address<A>
@@ -44,14 +44,22 @@ impl<A: Minion> PartialOrd for Address<A> {
     }
 }
 
-impl<A: Minion> Address<A> {
-    pub async fn send(&self, message: impl Into<A::Msg>) -> Result<(), MinionsError> {
+impl<A> Address<A>
+where
+    A: Minion,
+{
+    pub async fn send<M>(&self, message: impl Into<M>) -> Result<(), MinionsError>
+    where
+        A: Handler<M>,
+        M: Message + 'static,
+    {
         self.tx.send(message.into()).await
     }
-    pub async fn ask(
-        &self,
-        message: impl Into<A::Msg>,
-    ) -> Result<<A::Msg as Message>::Response, MinionsError> {
+    pub async fn ask<M>(&self, message: impl Into<M>) -> Result<A::Response, MinionsError>
+    where
+        A: Handler<M>,
+        M: Message + 'static,
+    {
         self.tx.send_and_await_response(message.into()).await
     }
 }

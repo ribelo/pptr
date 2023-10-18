@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{
     any::{type_name, Any},
     sync::OnceLock,
@@ -8,8 +9,8 @@ use async_trait::async_trait;
 use crate::{
     address::Address,
     gru::{self, set_status},
-    message::{Mailbox, Message, ServiceCommand},
-    MinionsError,
+    message::{Mailbox, Message, ServiceCommand, ServiceMailbox},
+    Id, MinionsError,
 };
 
 static DEFAULT_BUFFER_SIZE: OnceLock<usize> = OnceLock::new();
@@ -84,18 +85,24 @@ pub mod execution {
     pub enum ExecutionVariant {
         Sequential,
         Concurrent,
+        #[cfg(feature = "rayon")]
         Parallel,
     }
 
     impl ExecutionVariant {
-        pub fn from_type<A: 'static>() -> Self {
-            if TypeId::of::<Sequential>() == TypeId::of::<A>() {
+        pub fn from_type<A: 'static + ?Sized>() -> Self {
+            let type_id_a = TypeId::of::<A>();
+
+            if type_id_a == TypeId::of::<Sequential>() {
                 Self::Sequential
-            } else if TypeId::of::<Concurrent>() == TypeId::of::<A>() {
+            } else if type_id_a == TypeId::of::<Concurrent>() {
                 Self::Concurrent
-            } else if TypeId::of::<Parallel>() == TypeId::of::<A>() {
-                Self::Parallel
             } else {
+                #[cfg(feature = "rayon")]
+                if type_id_a == TypeId::of::<Parallel>() {
+                    return Self::Parallel;
+                }
+
                 unreachable!()
             }
         }
@@ -104,9 +111,6 @@ pub mod execution {
 
 #[async_trait]
 pub trait Minion: Send + Sync + Sized + Clone + 'static {
-    type Msg: Message;
-    type Exec: execution::ExecutionType = execution::Sequential;
-
     fn name(&self) -> String {
         type_name::<Self>().to_string()
     }
@@ -173,15 +177,38 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
             ServiceCommand::Terminate => self.fail().await,
         }
     }
-    async fn handle_message(
-        &mut self,
-        msg: <Self as Minion>::Msg,
-    ) -> <<Self as Minion>::Msg as Message>::Response;
 }
 
-pub(crate) struct MinionHandle<A: Minion> {
-    pub(crate) rx: Mailbox<A::Msg>,
-    pub(crate) command_rx: Mailbox<ServiceCommand>,
+#[async_trait]
+pub trait Handler<M: Message>: Minion {
+    type Response: Send + 'static;
+    type Exec: execution::ExecutionType = execution::Sequential;
+
+    async fn handle_message(&mut self, msg: &M) -> Self::Response;
+}
+
+pub(crate) struct MinionHandler<A: Minion> {
+    pub(crate) id: Id,
+    pub(crate) name: String,
+    pub(crate) rx: Mailbox<A>,
+    pub(crate) command_rx: ServiceMailbox,
+}
+
+impl<A: Minion> fmt::Display for MinionHandler<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Minion {{ id: {}, name: {} }}", self.id, self.name)
+    }
+}
+
+impl<A: Minion> fmt::Debug for MinionHandler<A> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MinionHandler")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("rx", &self.rx) // Dodaj, jeżeli Mailbox implementuje Debug
+            .field("command_rx", &self.command_rx) // Dodaj, jeżeli ServiceMailbox implementuje Debug
+            .finish()
+    }
 }
 
 pub struct MinionStruct<A: Minion> {

@@ -1,5 +1,5 @@
-mod log_error;
 mod message;
+mod minion;
 
 extern crate proc_macro;
 
@@ -12,8 +12,8 @@ pub fn derive_message(input: TokenStream) -> TokenStream {
     message::expand(&ast).into()
 }
 
-#[proc_macro_derive(LogError)]
+#[proc_macro_derive(Minion)]
 pub fn log_error_derive(input: TokenStream) -> TokenStream {
     let ast = parse_macro_input!(input as DeriveInput);
-    log_error::expand(&ast).into()
+    minion::expand(&ast).into()
 }
