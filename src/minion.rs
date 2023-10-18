@@ -1,20 +1,14 @@
-use core::fmt;
 use std::{
     any::{type_name, Any},
-    marker::PhantomData,
     sync::OnceLock,
 };
 
 use async_trait::async_trait;
-use tokio::sync::oneshot;
 
 use crate::{
     address::Address,
     gru::{self, set_status},
-    message::{
-        Mailbox, MaybeReplyAddress, Message, MessageResponse, MinionMessageResponse, Packet,
-        ServiceCommand,
-    },
+    message::{Mailbox, Message, ServiceCommand},
     MinionsError,
 };
 
@@ -48,6 +42,7 @@ impl LifecycleStatus {
 
 impl Copy for LifecycleStatus {}
 
+#[derive(Debug)]
 pub struct BoxedAny(Box<dyn Any + Send + Sync>);
 
 impl BoxedAny {
@@ -58,15 +53,22 @@ impl BoxedAny {
         Self(Box::new(minion))
     }
 
-    pub fn downcast<T>(&self) -> &T
+    pub fn downcast_ref_unchecked<T>(&self) -> &T
     where
         T: Any + Send + Sync + 'static,
     {
         unsafe { self.0.downcast_ref_unchecked::<T>() }
     }
+
+    pub fn downcast_mut_unchecked<T>(&mut self) -> &mut T
+    where
+        T: Any + Send + Sync + 'static,
+    {
+        unsafe { self.0.downcast_mut_unchecked::<T>() }
+    }
 }
 
-pub mod Execution {
+pub mod execution {
     use std::any::TypeId;
 
     pub trait ExecutionType {}
@@ -103,7 +105,7 @@ pub mod Execution {
 #[async_trait]
 pub trait Minion: Send + Sync + Sized + Clone + 'static {
     type Msg: Message;
-    type Exec: Execution::ExecutionType = Execution::Sequential;
+    type Exec: execution::ExecutionType = execution::Sequential;
 
     fn name(&self) -> String {
         type_name::<Self>().to_string()

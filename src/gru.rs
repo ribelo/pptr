@@ -1,31 +1,61 @@
 use std::{
     any::{type_name, Any, TypeId},
-    sync::{Arc, LazyLock, Mutex, RwLock},
+    sync::{Arc, OnceLock, RwLock},
 };
 
 use hashbrown::HashMap;
-use minions_derive::Minion;
+use pollster::FutureExt;
 use tokio::sync::mpsc;
 
 use crate::{
     address::Address,
     message::{Mailbox, Message, Packet, Postman, ServiceCommand},
-    minion::{BoxedAny, Execution, LifecycleStatus, Minion, MinionHandle, MinionStruct},
+    minion::{execution, BoxedAny, LifecycleStatus, Minion, MinionHandle, MinionStruct},
     Id, MinionsError,
 };
 
-pub static GRU: LazyLock<Gru> = LazyLock::new(Gru::new);
+pub static GRU: OnceLock<Gru> = OnceLock::new();
 
-#[derive(Clone, Default)]
+pub fn gru() -> &'static Gru {
+    GRU.get().expect("Gru not initialized")
+}
+
+#[derive(Clone, Default, Debug)]
 pub struct Gru {
     pub(crate) status: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
     pub(crate) address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
-    pub(crate) context: Arc<RwLock<HashMap<Id, BoxedAny>>>,
+    pub(crate) state: Arc<RwLock<HashMap<Id, BoxedAny>>>,
 }
 
+#[allow(dead_code)]
 impl Gru {
-    fn new() -> Self {
+    pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn init(&self) {
+        GRU.set(self.clone()).unwrap();
+    }
+
+    pub fn with_state<T>(&self, state: T) -> &Self
+    where
+        T: Any + Clone + Send + Sync,
+    {
+        let id: Id = TypeId::of::<T>().into();
+        gru()
+            .state
+            .write()
+            .expect("Failed to acquire write lock")
+            .insert(id, BoxedAny::new(state));
+        self
+    }
+
+    pub fn with_minion<A>(&self, minion: impl Into<MinionStruct<A>>) -> Result<&Self, MinionsError>
+    where
+        A: Minion,
+    {
+        self.spawn(minion)?;
+        Ok(self)
     }
 
     fn minion_exists<A>(&self) -> bool
@@ -72,7 +102,7 @@ impl Gru {
             .read()
             .expect("Failed to acquire read lock")
             .get(&id)
-            .map(|boxed_any| boxed_any.downcast::<Address<A>>().clone())
+            .map(|boxed_any| boxed_any.downcast_ref_unchecked::<Address<A>>().clone())
     }
 
     fn set_address<A>(&self, address: Address<A>)
@@ -118,11 +148,7 @@ impl Gru {
                 LifecycleStatus::Active
                 | LifecycleStatus::Activating
                 | LifecycleStatus::Restarting => address.tx.send(message.into()).await,
-                _ => {
-                    dbg!(address);
-                    dbg!(&GRU.status);
-                    Err(MinionsError::MinionCannotHandleMessage(status))
-                }
+                _ => Err(MinionsError::MinionCannotHandleMessage(status)),
             }
         } else {
             Err(MinionsError::MinionDoesNotExist(
@@ -155,6 +181,22 @@ impl Gru {
         }
     }
 
+    async fn ask_with_timeout<A>(
+        &self,
+        message: impl Into<A::Msg>,
+        duration: std::time::Duration,
+    ) -> Result<<A::Msg as Message>::Response, MinionsError>
+    where
+        A: Minion,
+    {
+        let ask_future = self.ask::<A>(message);
+        let timeout_future = tokio::time::sleep(duration);
+        tokio::select! {
+            response = ask_future => response,
+            _ = timeout_future => Err(MinionsError::MessageResponseTimeout),
+        }
+    }
+
     async fn send_command<A>(&self, command: ServiceCommand) -> Result<(), MinionsError>
     where
         A: Minion,
@@ -166,6 +208,13 @@ impl Gru {
                 type_name::<A>().to_string(),
             ))
         }
+    }
+
+    async fn start<A>(&self) -> Result<(), MinionsError>
+    where
+        A: Minion,
+    {
+        self.send_command::<A>(ServiceCommand::Start).await
     }
 
     async fn stop<A>(&self) -> Result<(), MinionsError>
@@ -196,17 +245,24 @@ impl Gru {
             ))
         }
     }
+
+    async fn restart<A>(&self) -> Result<(), MinionsError>
+    where
+        A: Minion,
+    {
+        self.send_command::<A>(ServiceCommand::Restart).await
+    }
 }
 
 macro_rules! forward {
     ($fn:ident($($arg_name:ident: $arg_type:ty),*) => $out:ty) => {
         pub fn $fn<A: Minion>($($arg_name: $arg_type),*) -> $out {
-            GRU.$fn::<A>($($arg_name),*)
+            gru().$fn::<A>($($arg_name),*)
         }
     };
     (async $fn:ident($($arg_name:ident: $arg_type:ty),*) => $out:ty) => {
         pub async fn $fn<A: Minion>($($arg_name: $arg_type),*) -> $out {
-            GRU.$fn::<A>($($arg_name),*).await
+            gru().$fn::<A>($($arg_name),*).await
         }
     };
 }
@@ -218,9 +274,12 @@ forward!(get_address() => Option<Address<A>>);
 forward!(spawn(minion: impl Into<MinionStruct<A>>) => Result<Address<A>, MinionsError>);
 forward!(async send(message: impl Into<A::Msg>) => Result<(), MinionsError>);
 forward!(async ask(message: impl Into<A::Msg>) => Result<<A::Msg as Message>::Response, MinionsError>);
+forward!(async ask_with_timeout(message: impl Into<A::Msg>, duratio: std::time::Duration) => Result<<A::Msg as Message>::Response, MinionsError>);
 forward!(async send_command(command: ServiceCommand) => Result<(), MinionsError>);
+forward!(async start() => Result<(), MinionsError>);
 forward!(async stop() => Result<(), MinionsError>);
 forward!(async kill() => Result<(), MinionsError>);
+forward!(async restart() => Result<(), MinionsError>);
 
 pub(crate) async fn run_minion_loop<A>(
     address: Address<A>,
@@ -234,7 +293,7 @@ pub(crate) async fn run_minion_loop<A>(
         .await
         .unwrap_or_else(|err| panic!("Minion {} failed to start. Err: {}", address, err));
 
-    let execution_variant = Execution::ExecutionVariant::from_type::<A::Exec>();
+    let execution_variant = execution::ExecutionVariant::from_type::<A::Exec>();
 
     loop {
         let Some(status) = get_status::<A>() else {
@@ -253,7 +312,7 @@ pub(crate) async fn run_minion_loop<A>(
             }
             Some(Packet { message, reply_address }) = handle.rx.recv() => {
                 if status.should_handle_message() {
-                    use Execution::ExecutionVariant as E;
+                    use execution::ExecutionVariant as E;
                     match execution_variant {
                         E::Sequential => {
                             let response = minion.handle_message(message).await;
@@ -271,7 +330,16 @@ pub(crate) async fn run_minion_loop<A>(
                                 }
                             });
                         },
-                        E::Parallel => todo!(),
+                        E::Parallel => {
+                            let mut cloned_minion = minion.clone();
+                            let cloned_address = address.clone();
+                            rayon::spawn(move || {
+                                let response = cloned_minion.handle_message(message).block_on();
+                                if let Some(tx) = reply_address {
+                                    tx.send(Ok(response)).unwrap_or_else(|_| panic!("Minion {} failed to send response", cloned_address));
+                                }
+                            });
+                        },
                     }
                 } else if status.should_drop_message() {
                     if let Some(tx) = reply_address {
@@ -311,14 +379,11 @@ where
 mod tests {
 
     use async_trait::async_trait;
-    use minions_derive::{Message, Minion};
+    use minions_derive::Message;
 
     // use crate::context::provide_context;
 
-    use crate::{
-        context::{provide_context, with_context_async},
-        minion::{self},
-    };
+    use crate::state::{provide_state, with_state, with_state_mut};
 
     use super::*;
 
@@ -349,15 +414,28 @@ mod tests {
         #[async_trait]
         impl Minion for SleepActor {
             type Msg = SleepMessage;
-            type Exec = Execution::Concurrent;
+            type Exec = execution::Concurrent;
             async fn handle_message(&mut self, msg: Self::Msg) -> <Self::Msg as Message>::Response {
                 println!("SleepActor Received message: {:?}", msg);
+                with_state(|i: Option<&i32>| {
+                    if i.is_some() {
+                        println!("SleepActor Context: {:?}", i);
+                    }
+                });
+                with_state_mut(|i: Option<&mut i32>| {
+                    *i.unwrap() += 1;
+                });
                 tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
                 msg.i
             }
         }
 
-        provide_context::<i32>(0);
+        Gru::new()
+            .with_state(0)
+            .with_minion(SleepActor { i: 0 })
+            .unwrap()
+            .init();
+        provide_state::<i32>(0);
         spawn(SleepActor { i: 0 }).unwrap();
         let mut set = tokio::task::JoinSet::new();
         for _ in 0..10 {

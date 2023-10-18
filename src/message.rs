@@ -4,7 +4,6 @@ use std::{
 };
 
 use minions_derive::Message;
-use thiserror::Error;
 use tokio::sync::oneshot;
 
 use crate::MinionsError;

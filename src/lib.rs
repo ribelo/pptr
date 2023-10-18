@@ -1,7 +1,5 @@
 #![feature(lazy_cell)]
 #![feature(downcast_unchecked)]
-#![feature(async_fn_in_trait)]
-#![feature(return_position_impl_trait_in_trait)]
 #![feature(associated_type_defaults)]
 
 use std::{
@@ -15,10 +13,10 @@ use minion::LifecycleStatus;
 use thiserror::Error;
 
 pub mod address;
-pub mod context;
 pub mod gru;
 pub mod message;
 pub mod minion;
+pub mod state;
 
 #[derive(Debug, Error)]
 pub enum MinionsError {
@@ -63,4 +61,20 @@ impl std::hash::Hash for Id {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_u64(self.hash);
     }
+}
+
+pub mod prelude {
+    #[cfg(feature = "derive")]
+    pub use minions_derive::*;
+
+    pub use crate::{
+        address::Address,
+        gru::{
+            ask, ask_with_timeout, get_address, kill, minion_exists, restart, send, spawn, start,
+            stop,
+        },
+        message::{Message, ServiceCommand},
+        minion::{execution, Minion},
+        state::{expect_state, get_state, provide_state, with_state, with_state_mut},
+    };
 }

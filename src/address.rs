@@ -1,10 +1,6 @@
-use std::{
-    any::{type_name, TypeId},
-    fmt,
-};
+use std::fmt;
 
 use crate::{
-    gru::send,
     message::{Message, Postman, ServiceCommand},
     minion::Minion,
     Id, MinionsError,

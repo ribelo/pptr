@@ -5,7 +5,7 @@ use minions::{
     // context::{with_context, with_context_mut},
     gru::{ask, kill, minion_exists, send, spawn, stop},
     message::Message,
-    minion::{self, MinionStruct, MinionVariant},
+    minion::{Execution, Minion, MinionStruct},
 };
 use minions_derive::Message;
 
@@ -19,14 +19,19 @@ struct PingActor {
 }
 
 #[derive(Clone)]
+struct ConcurrentPingActor {
+    count: usize,
+}
+
+#[derive(Clone)]
 struct ParallelPingActor {
     count: usize,
 }
 
 #[async_trait]
-impl MinionVariant for PingActor {
+impl Minion for PingActor {
     type Msg = PingMessage;
-    type Execution = minion::Sequential;
+    type Exec = Execution::Sequential;
     async fn handle_message(&mut self, msg: PingMessage) -> usize {
         self.count += msg.0;
         self.count
@@ -34,9 +39,19 @@ impl MinionVariant for PingActor {
 }
 
 #[async_trait]
-impl MinionVariant for ParallelPingActor {
+impl Minion for ConcurrentPingActor {
     type Msg = PingMessage;
-    type Execution = minion::Parallel;
+    type Exec = Execution::Concurrent;
+    async fn handle_message(&mut self, msg: PingMessage) -> usize {
+        self.count += msg.0;
+        self.count
+    }
+}
+
+#[async_trait]
+impl Minion for ParallelPingActor {
+    type Msg = PingMessage;
+    type Exec = Execution::Parallel;
     async fn handle_message(&mut self, msg: PingMessage) -> usize {
         self.count += msg.0;
         self.count
@@ -90,6 +105,54 @@ fn benchmarks(c: &mut Criterion) {
                     let _res = address.ask(PingMessage(10)).await;
                 }
                 kill::<PingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion concurrent send ping 1e5", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(ConcurrentPingActor { count: 10 });
+                let _address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    send::<ConcurrentPingActor>(PingMessage(10)).await.unwrap();
+                }
+                kill::<ConcurrentPingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion concurrent address send ping 1e5", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(ConcurrentPingActor { count: 10 });
+                let address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    address.send(PingMessage(10)).await.unwrap();
+                }
+                kill::<ConcurrentPingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion concurrent ask ping 1e5", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(ConcurrentPingActor { count: 10 });
+                let _address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    let _res = ask::<ConcurrentPingActor>(PingMessage(10)).await;
+                }
+                kill::<ConcurrentPingActor>().await.unwrap();
+            })
+        })
+    });
+    c.bench_function("minion address concurrent ask ping 1e5", |b| {
+        b.iter(|| {
+            runtime.block_on(async {
+                let actor = MinionStruct::new(ParallelPingActor { count: 10 });
+                let address = spawn(actor).unwrap();
+                for _ in 0..100_000 {
+                    let _res = address.ask(PingMessage(10)).await;
+                }
+                kill::<ParallelPingActor>().await.unwrap();
             })
         })
     });
