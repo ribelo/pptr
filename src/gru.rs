@@ -32,9 +32,7 @@ pub struct Gru {
 #[allow(dead_code)]
 impl Gru {
     pub fn new() -> Self {
-        let gru: Gru = Default::default();
-        GRU.set(gru.clone()).unwrap();
-        gru
+        GRU.get_or_init(Default::default).clone()
     }
 
     pub fn with_state<T>(&self, state: T) -> &Self

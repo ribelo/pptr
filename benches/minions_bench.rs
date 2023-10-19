@@ -54,6 +54,7 @@ impl Handler<PingMessage> for ConcurrentPingActor {
     }
 }
 
+#[cfg(feature = "rayon")]
 #[async_trait]
 impl Handler<PingMessage> for ParallelPingActor {
     type Response = usize;
@@ -159,15 +160,16 @@ fn benchmarks(c: &mut Criterion) {
         b.iter(|| {
             runtime.block_on(async {
                 let _gru = Gru::new();
-                let actor = MinionStruct::new(ParallelPingActor { count: 10 });
+                let actor = MinionStruct::new(ConcurrentPingActor { count: 10 });
                 let address = spawn(actor).unwrap();
                 for _ in 0..100_000 {
                     let _res = address.ask(PingMessage(10)).await;
                 }
-                kill::<ParallelPingActor>().await.unwrap();
+                kill::<ConcurrentPingActor>().await.unwrap();
             })
         })
     });
+    #[cfg(feature = "rayon")]
     c.bench_function("minion parallel send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
@@ -181,6 +183,7 @@ fn benchmarks(c: &mut Criterion) {
             })
         })
     });
+    #[cfg(feature = "rayon")]
     c.bench_function("minion parallel address send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
@@ -194,6 +197,7 @@ fn benchmarks(c: &mut Criterion) {
             })
         })
     });
+    #[cfg(feature = "rayon")]
     c.bench_function("minion parallel ask ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
@@ -207,6 +211,7 @@ fn benchmarks(c: &mut Criterion) {
             })
         })
     });
+    #[cfg(feature = "rayon")]
     c.bench_function("minion address parallel ask ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {

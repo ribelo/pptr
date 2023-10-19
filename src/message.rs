@@ -217,6 +217,7 @@ impl ServicePostman {
             .send(packet)
             .await
             .map_err(|_| MinionsError::MessageSendError)?;
+
         match res_rx.await {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(err)) => Err(err),

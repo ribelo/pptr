@@ -76,10 +76,12 @@ pub mod execution {
 
     pub struct Sequential;
     pub struct Concurrent;
+    #[cfg(feature = "rayon")]
     pub struct Parallel;
 
     impl ExecutionType for Sequential {}
     impl ExecutionType for Concurrent {}
+    #[cfg(feature = "rayon")]
     impl ExecutionType for Parallel {}
 
     pub enum ExecutionVariant {
