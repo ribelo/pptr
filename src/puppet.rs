@@ -7,10 +7,11 @@ use std::{
 use async_trait::async_trait;
 
 use crate::{
-    address::Address,
-    gru::{self, set_status},
+    address::PuppetAddress,
+    gru::{self, Puppeter},
+    master::Master,
     message::{Mailbox, Message, ServiceCommand, ServiceMailbox},
-    Id, MinionsError,
+    Id, PuppeterError,
 };
 
 static DEFAULT_BUFFER_SIZE: OnceLock<usize> = OnceLock::new();
@@ -47,11 +48,11 @@ impl Copy for LifecycleStatus {}
 pub struct BoxedAny(Box<dyn Any + Send + Sync>);
 
 impl BoxedAny {
-    pub fn new<A>(minion: A) -> Self
+    pub fn new<P>(puppet: P) -> Self
     where
-        A: Any + Send + Sync,
+        P: Any + Send + Sync,
     {
-        Self(Box::new(minion))
+        Self(Box::new(puppet))
     }
 
     pub fn downcast_ref_unchecked<T>(&self) -> &T
@@ -92,8 +93,8 @@ pub mod execution {
     }
 
     impl ExecutionVariant {
-        pub fn from_type<A: 'static + ?Sized>() -> Self {
-            let type_id_a = TypeId::of::<A>();
+        pub fn from_type<P: 'static + ?Sized>() -> Self {
+            let type_id_a = TypeId::of::<P>();
 
             if type_id_a == TypeId::of::<Sequential>() {
                 Self::Sequential
@@ -112,66 +113,66 @@ pub mod execution {
 }
 
 #[async_trait]
-pub trait Minion: Send + Sync + Sized + Clone + 'static {
+pub trait Puppet: Master + Send + Sync + Sized + Clone + 'static {
     fn name(&self) -> String {
         type_name::<Self>().to_string()
     }
 
-    async fn pre_start(&mut self) -> Result<(), MinionsError> {
+    async fn pre_start(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn post_start(&mut self) -> Result<(), MinionsError> {
+    async fn post_start(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn pre_stop(&mut self) -> Result<(), MinionsError> {
+    async fn pre_stop(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn post_stop(&mut self) -> Result<(), MinionsError> {
+    async fn post_stop(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn start(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Starting minion {}", self.name());
-        set_status::<Self>(LifecycleStatus::Activating);
-        self.pre_start().await?;
-        set_status::<Self>(LifecycleStatus::Active);
-        self.post_start().await?;
+    async fn start(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!("Starting puppet {}", self.name());
+        // gru.set_status::<Self>(LifecycleStatus::Activating);
+        // self.pre_start(gru).await?;
+        // gru.set_status::<Self>(LifecycleStatus::Active);
+        // self.post_start(gru).await?;
         Ok(())
     }
 
-    async fn stop(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Stopping minion {}", self.name());
-        set_status::<Self>(LifecycleStatus::Deactivating);
-        self.pre_stop().await?;
-        set_status::<Self>(LifecycleStatus::Inactive);
-        self.post_stop().await?;
+    async fn stop(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!("Stopping puppet {}", self.name());
+        // gru.set_status::<Self>(LifecycleStatus::Deactivating);
+        // self.pre_stop(gru).await?;
+        // gru.set_status::<Self>(LifecycleStatus::Inactive);
+        // self.post_stop(gru).await?;
         Ok(())
     }
 
-    async fn restart(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Restarting minion {}", self.name());
-        set_status::<Self>(LifecycleStatus::Restarting);
-        self.pre_stop().await?;
-        self.post_stop().await?;
-        self.pre_start().await?;
-        self.post_start().await?;
-        set_status::<Self>(LifecycleStatus::Active);
+    async fn restart(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!("Restarting puppet {}", self.name());
+        // gru.set_status::<Self>(LifecycleStatus::Restarting);
+        // self.pre_stop(gru).await?;
+        // self.post_stop(gru).await?;
+        // self.pre_start(gru).await?;
+        // self.post_start(gru).await?;
+        // gru.set_status::<Self>(LifecycleStatus::Active);
         Ok(())
     }
 
-    async fn fail(&mut self) -> Result<(), MinionsError> {
-        tracing::debug!("Failing minion {}", self.name());
-        set_status::<Self>(LifecycleStatus::Failed);
-        self.pre_stop().await?;
-        self.post_stop().await?;
+    async fn fail(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!("Failing puppet {}", self.name());
+        // gru.set_status::<Self>(LifecycleStatus::Failed);
+        // self.pre_stop(gru).await?;
+        // self.post_stop(gru).await?;
         Ok(())
     }
 
     #[inline(always)]
-    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), MinionsError> {
+    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppeterError> {
         match cmd {
             ServiceCommand::Start => self.start().await,
             ServiceCommand::Stop => self.stop().await,
@@ -182,29 +183,29 @@ pub trait Minion: Send + Sync + Sized + Clone + 'static {
 }
 
 #[async_trait]
-pub trait Handler<M: Message>: Minion {
+pub trait Handler<M: Message>: Puppet {
     type Response: Send + 'static;
     type Exec: execution::ExecutionType = execution::Sequential;
 
-    async fn handle_message(&mut self, msg: &M) -> Self::Response;
+    async fn handle_message(&mut self, msg: M) -> Self::Response;
 }
 
-pub(crate) struct MinionHandler<A: Minion> {
+pub(crate) struct PuppetHandler<P: Puppet> {
     pub(crate) id: Id,
     pub(crate) name: String,
-    pub(crate) rx: Mailbox<A>,
+    pub(crate) rx: Mailbox<P>,
     pub(crate) command_rx: ServiceMailbox,
 }
 
-impl<A: Minion> fmt::Display for MinionHandler<A> {
+impl<P: Puppet> fmt::Display for PuppetHandler<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Minion {{ id: {}, name: {} }}", self.id, self.name)
+        write!(f, "Puppet {{ id: {}, name: {} }}", self.id, self.name)
     }
 }
 
-impl<A: Minion> fmt::Debug for MinionHandler<A> {
+impl<P: Puppet> fmt::Debug for PuppetHandler<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("MinionHandler")
+        f.debug_struct("PuppetHandler")
             .field("id", &self.id)
             .field("name", &self.name)
             .field("rx", &self.rx) // Dodaj, jeżeli Mailbox implementuje Debug
@@ -213,16 +214,16 @@ impl<A: Minion> fmt::Debug for MinionHandler<A> {
     }
 }
 
-pub struct MinionStruct<A: Minion> {
-    pub(crate) minion: A,
+pub struct PuppetStruct<P: Puppet> {
+    pub(crate) Puppet: P,
     pub(crate) buffer_size: usize,
     pub(crate) commands_buffer_size: usize,
 }
 
-impl<A: Minion> MinionStruct<A> {
-    pub fn new(minion: A) -> Self {
+impl<P: Puppet> PuppetStruct<P> {
+    pub fn new(puppet: P) -> Self {
         Self {
-            minion,
+            Puppet: puppet,
             buffer_size: *DEFAULT_BUFFER_SIZE.get_or_init(|| 1024),
             commands_buffer_size: *DEFAULT_SERVICE_BUFFER_SIZE.get_or_init(|| 1),
         }
@@ -237,14 +238,10 @@ impl<A: Minion> MinionStruct<A> {
         self.buffer_size = buffer_size;
         self
     }
-
-    pub fn spawn(self) -> Result<Address<A>, MinionsError> {
-        gru::spawn(self)
-    }
 }
 
-impl<A: Minion> From<A> for MinionStruct<A> {
-    fn from(value: A) -> Self {
-        MinionStruct::new(value)
+impl<P: Puppet> From<P> for PuppetStruct<P> {
+    fn from(value: P) -> Self {
+        PuppetStruct::new(value)
     }
 }

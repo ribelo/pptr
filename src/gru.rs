@@ -1,76 +1,221 @@
+#![allow(dead_code)]
 use std::{
-    any::{type_name, Any, TypeId},
-    sync::{Arc, OnceLock, RwLock},
+    any::{type_name, TypeId},
+    sync::{Arc, RwLock},
 };
 
-use hashbrown::HashMap;
+use async_trait::async_trait;
+use hashbrown::{HashMap, HashSet};
 use tokio::sync::mpsc;
 
 use crate::{
-    address::Address,
+    address::{CommandAddress, PuppetAddress},
+    master::{Master, PuppetCommander, PuppetCommunicator, PuppetInfo, PuppetLifecycle},
     message::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
     },
-    minion::{BoxedAny, Handler, LifecycleStatus, Minion, MinionHandler, MinionStruct},
-    Id, MinionsError,
+    puppet::{BoxedAny, Handler, LifecycleStatus, Puppet, PuppetHandler, PuppetStruct},
+    Id, PuppeterError,
 };
 
-pub static GRU: OnceLock<Gru> = OnceLock::new();
-
-pub fn gru() -> &'static Gru {
-    GRU.get().expect("Gru not initialized")
-}
-
-#[derive(Clone, Default, Debug)]
-pub struct Gru {
+#[derive(Clone, Debug, Default)]
+pub struct Puppeter {
     pub(crate) status: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
-    pub(crate) address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
+    pub(crate) puppet_address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
+    pub(crate) command_address: Arc<RwLock<HashMap<Id, CommandAddress>>>,
+    pub(crate) master: Arc<RwLock<HashMap<Id, HashSet<Id>>>>,
+    pub(crate) slave: Arc<RwLock<HashMap<Id, Id>>>,
     pub(crate) state: Arc<RwLock<HashMap<Id, BoxedAny>>>,
 }
 
-#[allow(dead_code)]
-impl Gru {
+impl Puppeter {
     pub fn new() -> Self {
-        GRU.get_or_init(Default::default).clone()
+        Default::default()
     }
 
-    pub fn with_state<T>(&self, state: T) -> &Self
+    pub(crate) fn set_status<P>(&self, status: LifecycleStatus) -> Option<LifecycleStatus>
     where
-        T: Any + Clone + Send + Sync,
+        P: Puppet,
     {
-        let id: Id = TypeId::of::<T>().into();
-        gru()
-            .state
+        let id: Id = TypeId::of::<P>().into();
+        self.status
             .write()
             .expect("Failed to acquire write lock")
-            .insert(id, BoxedAny::new(state));
-        self
+            .insert(id, status)
     }
 
-    pub fn with_minion<A>(&self, minion: impl Into<MinionStruct<A>>) -> Result<&Self, MinionsError>
+    pub(crate) fn set_address<P>(&self, address: PuppetAddress<P>)
     where
-        A: Minion,
+        P: Puppet,
     {
-        self.spawn(minion)?;
-        Ok(self)
+        let id: Id = TypeId::of::<P>().into();
+        self.puppet_address
+            .write()
+            .expect("Failed to acquire write lock")
+            .insert(id, BoxedAny::new(address));
     }
 
-    pub fn minion_exists<A>(&self) -> bool
+    pub(crate) fn set_command_address<P>(&self, address: CommandAddress)
     where
-        A: Minion,
+        P: Puppet,
+    {
+        let id: Id = TypeId::of::<P>().into();
+        self.command_address
+            .write()
+            .expect("Failed to acquire write lock")
+            .insert(id, address);
+    }
+
+    pub(crate) fn set_puppet<M, P>(&self)
+    where
+        M: Master,
+        P: Puppet,
+    {
+        let master: Id = TypeId::of::<M>().into();
+        let slave: Id = TypeId::of::<P>().into();
+
+        self.master
+            .write()
+            .expect("Failed to acquire write lock")
+            .entry(master)
+            .or_default()
+            .insert(slave);
+
+        self.slave
+            .write()
+            .expect("Failed to acquire write lock")
+            .insert(slave, master);
+    }
+
+    pub(crate) fn remove_puppet<M, P>(&self)
+    where
+        M: Master,
+        P: Puppet,
+    {
+        let master: Id = TypeId::of::<M>().into();
+        let slave: Id = TypeId::of::<P>().into();
+        self.master
+            .write()
+            .expect("Failed to acquire write lock")
+            .entry(master)
+            .or_default()
+            .remove(&slave);
+        self.slave
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&slave);
+    }
+
+    pub(crate) fn release_puppet<M, P>(&self)
+    where
+        M: Master,
+        P: Puppet,
+    {
+        self.remove_puppet::<M, P>();
+        self.set_puppet::<Self, P>();
+    }
+
+    pub(crate) fn get_master<P>(&self) -> Id
+    where
+        P: Puppet,
+    {
+        let slave: Id = TypeId::of::<P>().into();
+        self.slave
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&slave)
+            .cloned()
+            .unwrap()
+    }
+
+    pub(crate) async fn stop_puppets<M>(&self)
+    where
+        M: Puppet,
+    {
+        let master: Id = TypeId::of::<M>().into();
+        if let Some(slaves) = self.master.read().unwrap().get(&master) {
+            for slave in slaves {
+                if let Some(service_address) = self.command_address.read().unwrap().get(slave) {
+                    service_address
+                        .command_tx
+                        .send_and_await_response(ServiceCommand::Stop)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    pub(crate) async fn kill_puppets<M>(&self)
+    where
+        M: Master,
+    {
+        let master: Id = TypeId::of::<M>().into();
+        if let Some(slaves) = self.master.read().unwrap().get(&master) {
+            for slave in slaves {
+                if let Some(service_address) = self.command_address.read().unwrap().get(slave) {
+                    service_address
+                        .command_tx
+                        .send_and_await_response(ServiceCommand::Terminate)
+                        .await
+                        .unwrap();
+                }
+            }
+        }
+    }
+
+    // pub fn with_state<T>(self, state: T) -> Self
+    // where
+    //     T: Any + Clone + Send + Sync,
+    // {
+    //     let id: Id = TypeId::of::<T>().into();
+    //     self.state
+    //         .write()
+    //         .expect("Failed to acquire write lock")
+    //         .insert(id, BoxedAny::new(state));
+    //     self
+    // }
+    //
+    // pub fn with_minion<A>(self, minion: impl Into<PuppetStruct<A>>) -> Result<Self, PuppeterError>
+    // where
+    //     A: Puppet,
+    // {
+    //     self.spawn(minion)?;
+    //     Ok(self)
+    // }
+}
+
+impl PuppetInfo for Puppeter {
+    fn is_puppet_exists<A>(&self) -> bool
+    where
+        A: Puppet,
     {
         let id: Id = TypeId::of::<A>().into();
-        self.address
+        self.puppet_address
             .read()
             .expect("Failed to acquire read lock")
             .contains_key(&id)
     }
 
-    #[inline(always)]
-    pub fn get_status<A>(&self) -> Option<LifecycleStatus>
+    fn has_puppet<M, P>(&self) -> bool
     where
-        A: Minion,
+        M: Master,
+        P: Puppet,
+    {
+        let master: Id = TypeId::of::<M>().into();
+        let slave: Id = TypeId::of::<P>().into();
+        self.master
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&master)
+            .map(|slaves| slaves.contains(&slave))
+            .unwrap_or(false)
+    }
+
+    fn get_status<A>(&self) -> Option<LifecycleStatus>
+    where
+        A: Puppet,
     {
         let id: Id = TypeId::of::<A>().into();
         self.status
@@ -80,149 +225,88 @@ impl Gru {
             .cloned()
     }
 
-    pub fn set_status<A>(&self, status: LifecycleStatus)
+    fn get_address<A>(&self) -> Option<PuppetAddress<A>>
     where
-        A: Minion,
+        A: Puppet,
     {
         let id: Id = TypeId::of::<A>().into();
-        self.status
-            .write()
-            .expect("Failed to acquire write lock")
-            .insert(id, status);
-    }
-
-    pub fn get_address<A>(&self) -> Option<Address<A>>
-    where
-        A: Minion,
-    {
-        let id: Id = TypeId::of::<A>().into();
-        self.address
+        self.puppet_address
             .read()
             .expect("Failed to acquire read lock")
             .get(&id)
-            .map(|boxed_any| boxed_any.downcast_ref_unchecked::<Address<A>>().clone())
+            .map(|boxed_any| {
+                boxed_any
+                    .downcast_ref_unchecked::<PuppetAddress<A>>()
+                    .clone()
+            })
     }
 
-    pub fn set_address<A>(&self, address: Address<A>)
+    fn get_command_address<A>(&self) -> Option<CommandAddress>
     where
-        A: Minion,
+        A: Puppet,
     {
         let id: Id = TypeId::of::<A>().into();
-        self.address
-            .write()
-            .expect("Failed to acquire write lock")
-            .insert(id, BoxedAny::new(address));
+        self.command_address
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&id)
+            .map(|boxed_any| boxed_any.clone())
     }
+}
 
-    pub fn spawn<A>(&self, minion: impl Into<MinionStruct<A>>) -> Result<Address<A>, MinionsError>
+#[async_trait]
+impl Master for Puppeter {
+    fn spawn<M, P>(
+        &self,
+        minion: impl Into<PuppetStruct<P>>,
+    ) -> Result<PuppetAddress<P>, PuppeterError>
     where
-        A: Minion,
+        M: Master,
+        P: Puppet,
     {
-        if self.minion_exists::<A>() {
-            Err(MinionsError::MinionAlreadyExists(
-                type_name::<A>().to_string(),
+        if self.is_puppet_exists::<P>() {
+            Err(PuppeterError::MinionAlreadyExists(
+                type_name::<P>().to_string(),
             ))
         } else {
             let minion_struct = minion.into();
-            let (handle, address) = create_minion_entities(&minion_struct);
-            self.set_status::<A>(LifecycleStatus::Activating);
-            self.set_address::<A>(address.clone());
-            tokio::spawn(run_minion_loop(minion_struct.minion, handle));
-            Ok(address)
+            let (handle, puppet_address, command_address) =
+                create_puppeter_entities(&minion_struct);
+
+            self.set_status::<P>(LifecycleStatus::Activating);
+            self.set_address::<P>(puppet_address.clone());
+            self.set_puppet::<M, P>();
+            tokio::spawn(run_minion_loop(self.clone(), minion_struct.Puppet, handle));
+            Ok(puppet_address)
         }
     }
+}
 
-    pub async fn send<A, M>(&self, message: M) -> Result<(), MinionsError>
+impl PuppetLifecycle for Puppeter {
+    async fn start<M, P>(&self) -> Result<(), PuppeterError>
     where
-        A: Handler<M>,
-        M: Message + 'static,
+        M: Master,
+        P: Puppet,
     {
-        if let Some(address) = self.get_address::<A>() {
-            let status = self.get_status::<A>().unwrap();
-            match status {
-                LifecycleStatus::Active
-                | LifecycleStatus::Activating
-                | LifecycleStatus::Restarting => address.tx.send(message).await,
-                _ => Err(MinionsError::MinionCannotHandleMessage(status)),
-            }
-        } else {
-            Err(MinionsError::MinionDoesNotExist(
-                type_name::<A>().to_string(),
-            ))
-        }
+        self.send_command::<M, P>(ServiceCommand::Start).await
     }
 
-    pub async fn ask<A, M>(&self, message: M) -> Result<A::Response, MinionsError>
+    async fn stop<M, P>(&self) -> Result<(), PuppeterError>
     where
-        A: Handler<M>,
-        M: Message + 'static,
+        M: Master,
+        P: Puppet,
     {
-        if let Some(address) = self.get_address::<A>() {
-            let status = self.get_status::<A>().unwrap();
-            match status {
-                LifecycleStatus::Active
-                | LifecycleStatus::Activating
-                | LifecycleStatus::Restarting => address.tx.send_and_await_response(message).await,
-                _ => Err(MinionsError::MinionCannotHandleMessage(status)),
-            }
-        } else {
-            Err(MinionsError::MinionDoesNotExist(
-                type_name::<A>().to_string(),
-            ))
-        }
+        self.send_command::<M, P>(ServiceCommand::Stop).await
     }
 
-    pub async fn ask_with_timeout<A, M>(
-        &self,
-        message: M,
-        duration: std::time::Duration,
-    ) -> Result<A::Response, MinionsError>
+    async fn kill<M, P>(&self) -> Result<(), PuppeterError>
     where
-        A: Handler<M>,
-        M: Message + 'static,
+        M: Master,
+        P: Puppet,
     {
-        let ask_future = self.ask::<A, M>(message);
-        let timeout_future = tokio::time::sleep(duration);
-        tokio::select! {
-            response = ask_future => response,
-            _ = timeout_future => Err(MinionsError::MessageResponseTimeout),
-        }
-    }
-
-    pub async fn send_command<A>(&self, command: ServiceCommand) -> Result<(), MinionsError>
-    where
-        A: Minion,
-    {
-        if let Some(address) = self.get_address::<A>() {
-            address.command_tx.send_and_await_response(command).await
-        } else {
-            Err(MinionsError::MinionDoesNotExist(
-                type_name::<A>().to_string(),
-            ))
-        }
-    }
-
-    pub async fn start<A>(&self) -> Result<(), MinionsError>
-    where
-        A: Minion,
-    {
-        self.send_command::<A>(ServiceCommand::Start).await
-    }
-
-    pub async fn stop<A>(&self) -> Result<(), MinionsError>
-    where
-        A: Minion,
-    {
-        self.send_command::<A>(ServiceCommand::Stop).await
-    }
-
-    pub async fn kill<A>(&self) -> Result<(), MinionsError>
-    where
-        A: Minion,
-    {
-        if let Some(address) = self.get_address::<A>() {
-            self.send_command::<A>(ServiceCommand::Terminate).await?;
-            self.address
+        if let Some(address) = self.get_command_address::<P>() {
+            self.send_command::<M, P>(ServiceCommand::Terminate).await?;
+            self.puppet_address
                 .write()
                 .expect("Failed to acquire write lock")
                 .remove(&address.id);
@@ -232,120 +316,102 @@ impl Gru {
                 .remove(&address.id);
             Ok(())
         } else {
-            Err(MinionsError::MinionDoesNotExist(
-                type_name::<A>().to_string(),
+            Err(PuppeterError::MinionDoesNotExist(
+                type_name::<P>().to_string(),
             ))
         }
     }
 
-    pub async fn restart<A>(&self) -> Result<(), MinionsError>
+    async fn restart<M, P>(&self) -> Result<(), PuppeterError>
     where
-        A: Minion,
+        M: Master,
+        P: Puppet,
     {
-        self.send_command::<A>(ServiceCommand::Restart).await
+        self.send_command::<M, P>(ServiceCommand::Restart).await
     }
 }
 
-pub fn minion_exists<A>() -> bool
-where
-    A: Minion,
-{
-    gru().minion_exists::<A>()
+impl PuppetCommunicator for Puppeter {
+    async fn send<M, P, E>(&self, message: E) -> Result<(), PuppeterError>
+    where
+        M: Master,
+        P: Handler<E>,
+        E: Message + 'static,
+    {
+        if let Some(address) = self.get_address::<P>() {
+            let status = self.get_status::<P>().unwrap();
+            match status {
+                LifecycleStatus::Active
+                | LifecycleStatus::Activating
+                | LifecycleStatus::Restarting => address.tx.send(message).await,
+                _ => Err(PuppeterError::MinionCannotHandleMessage(status)),
+            }
+        } else {
+            Err(PuppeterError::MinionDoesNotExist(
+                type_name::<P>().to_string(),
+            ))
+        }
+    }
+
+    async fn ask<M, P, E>(&self, message: E) -> Result<P::Response, PuppeterError>
+    where
+        M: Master,
+        P: Handler<E>,
+        E: Message + 'static,
+    {
+        if let Some(address) = self.get_address::<P>() {
+            let status = self.get_status::<P>().unwrap();
+            match status {
+                LifecycleStatus::Active
+                | LifecycleStatus::Activating
+                | LifecycleStatus::Restarting => address.tx.send_and_await_response(message).await,
+                _ => Err(PuppeterError::MinionCannotHandleMessage(status)),
+            }
+        } else {
+            Err(PuppeterError::MinionDoesNotExist(
+                type_name::<P>().to_string(),
+            ))
+        }
+    }
+
+    async fn ask_with_timeout<M, P, E>(
+        &self,
+        message: E,
+        duration: std::time::Duration,
+    ) -> Result<P::Response, PuppeterError>
+    where
+        M: Master,
+        P: Handler<E>,
+        E: Message + 'static,
+    {
+        let ask_future = self.ask::<M, P, E>(message);
+        let timeout_future = tokio::time::sleep(duration);
+        tokio::select! {
+            response = ask_future => response,
+            _ = timeout_future => Err(PuppeterError::MessageResponseTimeout),
+        }
+    }
 }
 
-pub fn get_status<A>() -> Option<LifecycleStatus>
-where
-    A: Minion,
-{
-    gru().get_status::<A>()
+impl PuppetCommander for Puppeter {
+    async fn send_command<M, P>(&self, command: ServiceCommand) -> Result<(), PuppeterError>
+    where
+        M: Master,
+        P: Puppet,
+    {
+        if let Some(address) = self.get_command_address::<P>() {
+            address.command_tx.send_and_await_response(command).await
+        } else {
+            Err(PuppeterError::MinionDoesNotExist(
+                type_name::<P>().to_string(),
+            ))
+        }
+    }
 }
 
-pub fn set_status<A>(status: LifecycleStatus)
+pub(crate) async fn run_minion_loop<A>(gru: Puppeter, mut minion: A, mut handle: PuppetHandler<A>)
 where
-    A: Minion,
-{
-    gru().set_status::<A>(status)
-}
-
-pub fn get_address<A>() -> Option<Address<A>>
-where
-    A: Minion,
-{
-    gru().get_address::<A>()
-}
-
-pub fn spawn<A>(minion: impl Into<MinionStruct<A>>) -> Result<Address<A>, MinionsError>
-where
-    A: Minion,
-{
-    gru().spawn(minion)
-}
-
-pub async fn send<A, M>(message: M) -> Result<(), MinionsError>
-where
-    A: Handler<M>,
-    M: Message + 'static,
-{
-    gru().send::<A, M>(message).await
-}
-
-pub async fn ask<A, M>(message: M) -> Result<A::Response, MinionsError>
-where
-    A: Handler<M>,
-    M: Message + 'static,
-{
-    gru().ask::<A, M>(message).await
-}
-
-pub async fn ask_with_timeout<A, M>(
-    message: M,
-    duration: std::time::Duration,
-) -> Result<A::Response, MinionsError>
-where
-    A: Handler<M>,
-    M: Message + 'static,
-{
-    gru().ask_with_timeout::<A, M>(message, duration).await
-}
-
-pub async fn send_command<A>(command: ServiceCommand) -> Result<(), MinionsError>
-where
-    A: Minion,
-{
-    gru().send_command::<A>(command).await
-}
-
-pub async fn start<A>() -> Result<(), MinionsError>
-where
-    A: Minion,
-{
-    gru().start::<A>().await
-}
-
-pub async fn stop<A>() -> Result<(), MinionsError>
-where
-    A: Minion,
-{
-    gru().stop::<A>().await
-}
-
-pub async fn kill<A>() -> Result<(), MinionsError>
-where
-    A: Minion,
-{
-    gru().kill::<A>().await
-}
-
-pub async fn restart<A>() -> Result<(), MinionsError>
-where
-    A: Minion,
-{
-    gru().restart::<A>().await
-}
-
-pub(crate) async fn run_minion_loop<A>(mut minion: A, mut handle: MinionHandler<A>)
-where
-    A: Minion,
+    A: Puppet,
 {
     minion
         .start()
@@ -353,7 +419,7 @@ where
         .unwrap_or_else(|err| panic!("{} failed to start. Err: {}", handle, err));
 
     loop {
-        let Some(status) = get_status::<A>() else {
+        let Some(status) = gru.get_status::<A>() else {
             break;
         };
         if status.should_wait_for_activation() {
@@ -367,10 +433,10 @@ where
             }
             Some(mut envelope) = handle.rx.recv() => {
                 if status.should_handle_message() {
-                    envelope.handle_message(&mut minion).await.unwrap_or_else(|err| println!("{} failed to handle command. Err: {}", handle, err));
+                    envelope.handle_message(&mut minion, &gru).await.unwrap_or_else(|err| println!("{} failed to handle command. Err: {}", handle, err));
                 }
                 else if status.should_drop_message() {
-                    envelope.reply_error(MinionsError::MinionCannotHandleMessage(status)).await.unwrap_or_else(|_| println!("{} failed to send response", handle));
+                    envelope.reply_error(PuppeterError::MinionCannotHandleMessage(status), &gru).await.unwrap_or_else(|_| println!("{} failed to send response", handle));
                 }
             }
             else => {
@@ -380,28 +446,34 @@ where
     }
 }
 
-fn create_minion_entities<A>(minion: &MinionStruct<A>) -> (MinionHandler<A>, Address<A>)
+fn create_puppeter_entities<P>(
+    minion: &PuppetStruct<P>,
+) -> (PuppetHandler<P>, PuppetAddress<P>, CommandAddress)
 where
-    A: Minion,
+    P: Puppet,
 {
-    let (tx, rx) = mpsc::channel::<Box<dyn Envelope<A>>>(minion.buffer_size);
+    let (tx, rx) = mpsc::channel::<Box<dyn Envelope<P>>>(minion.buffer_size);
     let (command_tx, command_rx) = mpsc::channel::<ServicePacket>(minion.commands_buffer_size);
 
-    let handler = MinionHandler {
-        id: TypeId::of::<A>().into(),
-        name: type_name::<A>().to_string(),
+    let handler = PuppetHandler {
+        id: TypeId::of::<P>().into(),
+        name: type_name::<P>().to_string(),
         rx: Mailbox::new(rx),
         command_rx: ServiceMailbox::new(command_rx),
     };
     let tx = Postman::new(tx);
     let command_tx = ServicePostman::new(command_tx);
-    let address = Address {
-        id: TypeId::of::<A>().into(),
-        name: type_name::<A>().to_string(),
+    let puppet_address = PuppetAddress {
+        id: TypeId::of::<P>().into(),
+        name: type_name::<P>().to_string(),
         tx,
+    };
+    let command_address = CommandAddress {
+        id: TypeId::of::<P>().into(),
+        name: type_name::<P>().to_string(),
         command_tx,
     };
-    (handler, address)
+    (handler, puppet_address, command_address)
 }
 
 #[allow(dead_code)]
@@ -413,10 +485,7 @@ mod tests {
 
     // use crate::context::provide_context;
 
-    use crate::{
-        prelude::execution,
-        state::{provide_state, with_state, with_state_mut},
-    };
+    use crate::prelude::execution;
 
     use super::*;
 
@@ -451,54 +520,38 @@ mod tests {
             i: i32,
         }
 
-        impl Minion for SleepActor {}
+        impl Master for SleepActor {}
+        impl Puppet for SleepActor {}
 
         #[async_trait]
         impl Handler<SleepMessage> for SleepActor {
             type Response = i32;
-            type Exec = execution::Sequential;
-            async fn handle_message(&mut self, msg: &SleepMessage) -> i32 {
+            type Exec = execution::Concurrent;
+            async fn handle_message(&mut self, msg: SleepMessage, gru: &Puppeter) -> i32 {
                 println!("SleepActor Received message: {:?}", msg);
-                with_state(|i: Option<&i32>| {
-                    if i.is_some() {
-                        println!("SleepActor Context: {:?}", i);
-                    }
-                });
-                with_state_mut(|i: Option<&mut i32>| {
-                    *i.unwrap() += 1;
-                });
+                // with_state(|i: Option<&i32>| {
+                //     if i.is_some() {
+                //         println!("SleepActor Context: {:?}", i);
+                //     }
+                // });
+                // with_state_mut(|i: Option<&mut i32>| {
+                //     *i.unwrap() += 1;
+                // });
                 tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
                 msg.i
             }
         }
 
-        #[async_trait]
-        impl Handler<SleepMessage2> for SleepActor {
-            type Response = i32;
-            type Exec = execution::Sequential;
-            async fn handle_message(&mut self, msg: &SleepMessage2) -> i32 {
-                println!("SleepActor Received message: {:?}", msg);
-                with_state(|i: Option<&i32>| {
-                    if i.is_some() {
-                        println!("SleepActor Context: {:?}", i);
-                    }
-                });
-                with_state_mut(|i: Option<&mut i32>| {
-                    *i.unwrap() += 1;
-                });
-                tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
-                msg.i
-            }
-        }
-
-        Gru::new()
+        let gru = Puppeter::new()
             .with_state(0)
             .with_minion(SleepActor { i: 0 })
             .unwrap();
-        provide_state::<i32>(0);
+        // provide_state::<i32>(0);
         // let mut set = tokio::task::JoinSet::new();
         for _ in 0..10 {
-            send::<SleepActor, _>(SleepMessage { i: 10 }).await.unwrap();
+            gru.send::<SleepActor, _>(SleepMessage { i: 10 })
+                .await
+                .unwrap();
             // set.spawn(ask::<SleepActor, _>(SleepMessage { i: 10 }));
             // set.spawn(ask::<TestActor>(TestMessage { i: 10 }));
         }

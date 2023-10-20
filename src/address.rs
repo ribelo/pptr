@@ -1,80 +1,80 @@
 use std::fmt;
 
 use crate::{
+    master::{Master, PuppetCommander, PuppetCommunicator},
     message::{Message, Postman, ServiceCommand, ServicePostman},
-    minion::{Handler, Minion},
-    Id, MinionsError,
+    puppet::{Handler, Puppet},
+    Id, PuppeterError,
 };
 
-pub struct Address<A>
+#[derive(Debug)]
+pub struct PuppetAddress<P>
 where
-    A: Minion,
+    P: Puppet,
 {
     pub id: Id,
     pub name: String,
-    pub(crate) tx: Postman<A>,
-    pub(crate) command_tx: ServicePostman,
+    pub(crate) tx: Postman<P>,
 }
 
-impl<A> Clone for Address<A>
-where
-    A: Minion,
-{
+impl<P: Puppet> Clone for PuppetAddress<P> {
     fn clone(&self) -> Self {
         Self {
             id: self.id,
             name: self.name.clone(),
             tx: self.tx.clone(),
-            command_tx: self.command_tx.clone(),
         }
     }
 }
 
-impl<A: Minion> PartialEq for Address<A> {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl<A: Minion> Eq for Address<A> {}
-
-impl<A: Minion> PartialOrd for Address<A> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.id.partial_cmp(&other.id)
-    }
-}
-
-impl<A> Address<A>
-where
-    A: Minion,
-{
-    pub async fn send<M>(&self, message: impl Into<M>) -> Result<(), MinionsError>
+impl<P: Puppet> PuppetAddress<P> {
+    async fn send<E>(&self, message: E) -> Result<(), PuppeterError>
     where
-        A: Handler<M>,
-        M: Message + 'static,
+        P: Handler<E>,
+        E: Message + 'static,
     {
-        self.tx.send(message.into()).await
+        self.tx.send(message).await
     }
-    pub async fn ask<M>(&self, message: impl Into<M>) -> Result<A::Response, MinionsError>
+
+    async fn ask<E>(&self, message: E) -> Result<<P>::Response, PuppeterError>
     where
-        A: Handler<M>,
-        M: Message + 'static,
+        P: Handler<E>,
+        E: Message + 'static,
     {
-        self.tx.send_and_await_response(message.into()).await
+        self.tx.send_and_await_response(message).await
+    }
+
+    async fn ask_with_timeout<E>(
+        &self,
+        message: E,
+        duration: std::time::Duration,
+    ) -> Result<<P>::Response, PuppeterError>
+    where
+        P: Handler<E>,
+        E: Message + 'static,
+    {
+        tokio::select! {
+            response = self.tx.send_and_await_response(message) => response,
+            _ = tokio::time::sleep(duration) => Err(PuppeterError::MessageResponseTimeout),
+        }
     }
 }
 
-impl<A: Minion> fmt::Display for Address<A> {
+impl<P: Puppet> fmt::Display for PuppetAddress<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Address {{ id: {}, name: {} }}", self.id, self.name)
     }
 }
 
-impl<A: Minion> fmt::Debug for Address<A> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Address")
-            .field("id", &self.id)
-            .field("name", &self.name)
-            .finish()
+#[derive(Debug, Clone)]
+pub struct CommandAddress {
+    pub id: Id,
+    pub name: String,
+    pub(crate) command_tx: ServicePostman,
+}
+
+impl CommandAddress {
+    async fn send_command(&self, command: ServiceCommand) -> Result<(), PuppeterError> {
+        self.command_tx.send_and_await_response(command).await
     }
 }

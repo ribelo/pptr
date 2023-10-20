@@ -1,6 +1,7 @@
 #![feature(lazy_cell)]
 #![feature(downcast_unchecked)]
 #![feature(associated_type_defaults)]
+#![feature(async_fn_in_trait)]
 
 use std::{
     any::TypeId,
@@ -9,17 +10,18 @@ use std::{
 };
 
 use ahash::AHasher;
-use minion::LifecycleStatus;
+use puppet::LifecycleStatus;
 use thiserror::Error;
 
 pub mod address;
 pub mod gru;
+mod master;
 pub mod message;
-pub mod minion;
+pub mod puppet;
 pub mod state;
 
 #[derive(Debug, Error)]
-pub enum MinionsError {
+pub enum PuppeterError {
     #[error("Minion already exists: {0}")]
     MinionAlreadyExists(String),
     #[error("Minion does not exist: {0}")]
@@ -70,13 +72,10 @@ pub mod prelude {
     pub use minions_derive::*;
 
     pub use crate::{
-        address::Address,
-        gru::{
-            ask, ask_with_timeout, get_address, kill, minion_exists, restart, send, spawn, start,
-            stop,
-        },
+        address::PuppetAddress,
+        gru::Puppeter,
         message::{Message, ServiceCommand},
-        minion::{execution, Minion},
-        state::{expect_state, get_state, provide_state, with_state, with_state_mut},
+        puppet::{execution, Puppet},
+        // state::{expect_state, get_state, provide_state, with_state, with_state_mut},
     };
 }
