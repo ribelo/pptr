@@ -24,7 +24,8 @@ pub trait Message: Send + 'static {}
 pub enum ServiceCommand {
     InitiateStart { sender: Id },
     InitiateStop { sender: Id },
-    RequestRestart { sender: Id },
+    RequestSelfRestart { sender: Id },
+    RequestTreeRestart { sender: Id },
     ForceTermination { sender: Id },
     ReportFailure { sender: Id, message: Option<String> },
 }
