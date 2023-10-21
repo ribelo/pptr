@@ -1,7 +1,6 @@
 use std::fmt;
 
 use crate::{
-    master::{Master, PuppetCommander, PuppetCommunicator},
     message::{Message, Postman, ServiceCommand, ServicePostman},
     puppet::{Handler, Puppet},
     Id, PuppeterError,
@@ -74,7 +73,7 @@ pub struct CommandAddress {
 }
 
 impl CommandAddress {
-    async fn send_command(&self, command: ServiceCommand) -> Result<(), PuppeterError> {
+    pub async fn send_command(&self, command: ServiceCommand) -> Result<(), PuppeterError> {
         self.command_tx.send_and_await_response(command).await
     }
 }

@@ -2,6 +2,7 @@
 #![feature(downcast_unchecked)]
 #![feature(associated_type_defaults)]
 #![feature(async_fn_in_trait)]
+#![feature(const_trait_impl)]
 
 use std::{
     any::TypeId,
@@ -14,8 +15,7 @@ use puppet::LifecycleStatus;
 use thiserror::Error;
 
 pub mod address;
-pub mod gru;
-mod master;
+pub mod master;
 pub mod message;
 pub mod puppet;
 pub mod state;
@@ -73,7 +73,7 @@ pub mod prelude {
 
     pub use crate::{
         address::PuppetAddress,
-        gru::Puppeter,
+        master::Puppeter,
         message::{Message, ServiceCommand},
         puppet::{execution, Puppet},
         // state::{expect_state, get_state, provide_state, with_state, with_state_mut},

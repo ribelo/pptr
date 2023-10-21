@@ -3,7 +3,7 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use minions::{
     address::PuppetAddress,
     // context::{with_context, with_context_mut},
-    gru::Puppeter,
+    master::Puppeter,
     message::Message,
     puppet::{execution, Puppet, PuppetHandler, PuppetStruct},
 };

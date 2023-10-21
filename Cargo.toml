@@ -14,8 +14,10 @@ strum = { version = "0.25", features = ["derive"] }
 thiserror = "1.0"
 tokio = { version = "1.32", features = ["full"] }
 tracing = "0.1"
+indexmap = "2.0.2"
 
 [dev-dependencies]
+minions-derive = { path = "./minions-derive" }
 actix = "0.13.1"
 vin = "9.1"
 ractor = "0.9"
@@ -23,7 +25,7 @@ criterion = "0.5"
 coerce = "0.8.10"
 
 [features]
-derive = ["minions-derive"]
+derive = ["dep:minions-derive"]
 rayon = ["dep:rayon", "dep:pollster"]
 
 [[bench]]

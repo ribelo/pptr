@@ -5,7 +5,7 @@ use std::{
 };
 
 use crate::{
-    gru::Puppeter,
+    master::Puppeter,
     puppet::{self, Handler, Puppet},
 };
 use async_trait::async_trait;
@@ -13,21 +13,20 @@ use async_trait::async_trait;
 use pollster::FutureExt;
 #[cfg(feature = "rayon")]
 use rayon;
-use tokio::sync::oneshot;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::PuppeterError;
 
-pub trait Message: Send {}
+pub trait Message: Send + 'static {}
 
 #[derive(Debug, Clone, strum::Display)]
 pub enum ServiceCommand {
-    Start,
-    Stop,
-    Restart,
-    Terminate,
+    InitiateStart,
+    InitiateStop,
+    RequestRestart,
+    ForceTermination,
+    ReportFailure(Option<String>),
 }
-
-impl Copy for ServiceCommand {}
 
 impl Message for ServiceCommand {}
 
@@ -36,14 +35,9 @@ pub type MaybeReplyAddress<T> = Option<ReplyAddress<T>>;
 pub type MessageResponse<P, H> = <H as Handler<P>>::Response;
 
 #[async_trait]
-pub trait Envelope<A: Puppet>: Send {
-    async fn handle_message(&mut self, minion: &mut A, gru: &Puppeter)
-        -> Result<(), PuppeterError>;
-    async fn reply_error(
-        &mut self,
-        err: PuppeterError,
-        gru: &Puppeter,
-    ) -> Result<(), PuppeterError>;
+pub trait Envelope<P: Puppet>: Send {
+    async fn handle_message(&mut self, puppet: &mut P) -> Result<(), PuppeterError>;
+    async fn reply_error(&mut self, err: PuppeterError) -> Result<(), PuppeterError>;
 }
 
 pub struct Packet<P, M>
@@ -81,22 +75,18 @@ where
 }
 
 #[async_trait]
-impl<A, M> Envelope<A> for Packet<A, M>
+impl<P, M> Envelope<P> for Packet<P, M>
 where
-    A: Handler<M>,
+    P: Handler<M>,
     M: Message + 'static,
 {
-    async fn handle_message(
-        &mut self,
-        minion: &mut A,
-        gru: &Puppeter,
-    ) -> Result<(), PuppeterError> {
-        let execution_variant = puppet::execution::ExecutionVariant::from_type::<A::Exec>();
+    async fn handle_message(&mut self, puppet: &mut P) -> Result<(), PuppeterError> {
+        let execution_variant = puppet::execution::ExecutionVariant::from_type::<P::Exec>();
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
         match execution_variant {
             puppet::execution::ExecutionVariant::Sequential => {
-                let response = minion.handle_message(msg).await;
+                let response = puppet.handle_message(msg).await;
                 if let Some(reply_address) = reply_address {
                     reply_address
                         .send(Ok(response))
@@ -104,7 +94,7 @@ where
                 }
             }
             puppet::execution::ExecutionVariant::Concurrent => {
-                let mut cloned_minion = minion.clone();
+                let mut cloned_minion = puppet.clone();
                 tokio::spawn(async move {
                     let response = cloned_minion.handle_message(msg).await;
                     if let Some(reply_address) = reply_address {
@@ -116,7 +106,7 @@ where
             }
             #[cfg(feature = "rayon")]
             puppet::execution::ExecutionVariant::Parallel => {
-                let mut cloned_minion = minion.clone();
+                let mut cloned_minion = puppet.clone();
                 rayon::spawn(move || {
                     let response = cloned_minion.handle_message(msg).block_on();
                     if let Some(reply_address) = reply_address {
@@ -129,11 +119,7 @@ where
         };
         Ok(())
     }
-    async fn reply_error(
-        &mut self,
-        err: PuppeterError,
-        gru: &Puppeter,
-    ) -> Result<(), PuppeterError> {
+    async fn reply_error(&mut self, err: PuppeterError) -> Result<(), PuppeterError> {
         if let Some(reply_address) = self.reply_address.take() {
             reply_address
                 .send(Err(err))
@@ -248,7 +234,7 @@ pub(crate) struct Mailbox<A>
 where
     A: Puppet,
 {
-    rx: tokio::sync::mpsc::Receiver<Box<dyn Envelope<A>>>,
+    rx: mpsc::Receiver<Box<dyn Envelope<A>>>,
 }
 
 impl<A: Puppet> fmt::Debug for Mailbox<A> {
@@ -261,7 +247,7 @@ impl<A> Mailbox<A>
 where
     A: Puppet,
 {
-    pub fn new(rx: tokio::sync::mpsc::Receiver<Box<dyn Envelope<A>>>) -> Self {
+    pub fn new(rx: mpsc::Receiver<Box<dyn Envelope<A>>>) -> Self {
         Self { rx }
     }
     pub async fn recv(&mut self) -> Option<Box<dyn Envelope<A>>>
@@ -269,6 +255,10 @@ where
         A: Puppet,
     {
         self.rx.recv().await
+    }
+    pub async fn cleanup(&mut self) {
+        let duration = std::time::Duration::from_millis(100);
+        while let Ok(Some(_)) = tokio::time::timeout(duration, self.recv()).await {}
     }
 }
 
