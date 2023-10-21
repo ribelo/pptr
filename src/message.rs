@@ -7,6 +7,7 @@ use std::{
 use crate::{
     master::Puppeter,
     puppet::{self, Handler, Puppet},
+    Id,
 };
 use async_trait::async_trait;
 #[cfg(feature = "rayon")]
@@ -21,11 +22,11 @@ pub trait Message: Send + 'static {}
 
 #[derive(Debug, Clone, strum::Display)]
 pub enum ServiceCommand {
-    InitiateStart,
-    InitiateStop,
-    RequestRestart,
-    ForceTermination,
-    ReportFailure(Option<String>),
+    InitiateStart { sender: Id },
+    InitiateStop { sender: Id },
+    RequestRestart { sender: Id },
+    ForceTermination { sender: Id },
+    ReportFailure { sender: Id, message: Option<String> },
 }
 
 impl Message for ServiceCommand {}

@@ -80,15 +80,15 @@ pub mod execution {
 
     impl ExecutionVariant {
         pub fn from_type<P: 'static + ?Sized>() -> Self {
-            let type_id_a = TypeId::of::<P>();
+            let type_id = TypeId::of::<P>();
 
-            if type_id_a == TypeId::of::<Sequential>() {
+            if type_id == TypeId::of::<Sequential>() {
                 Self::Sequential
-            } else if type_id_a == TypeId::of::<Concurrent>() {
+            } else if type_id == TypeId::of::<Concurrent>() {
                 Self::Concurrent
             } else {
                 #[cfg(feature = "rayon")]
-                if type_id_a == TypeId::of::<Parallel>() {
+                if type_id == TypeId::of::<Parallel>() {
                     return Self::Parallel;
                 }
 
@@ -105,6 +105,27 @@ pub mod supervisor_strategy {
     pub struct OneForAll;
     pub struct RestForOne;
 
+    pub enum SupervisionVariant {
+        OneToOne,
+        OneForAll,
+        RestForOne,
+    }
+
+    impl SupervisionVariant {
+        pub fn from_type<P: 'static + ?Sized>() -> Self {
+            let type_id = std::any::TypeId::of::<P>();
+            if type_id == std::any::TypeId::of::<OneToOne>() {
+                Self::OneToOne
+            } else if type_id == std::any::TypeId::of::<OneForAll>() {
+                Self::OneForAll
+            } else if type_id == std::any::TypeId::of::<RestForOne>() {
+                Self::RestForOne
+            } else {
+                unreachable!()
+            }
+        }
+    }
+
     impl super::SupervisorStrategy for OneToOne {}
     impl super::SupervisorStrategy for OneForAll {}
     impl super::SupervisorStrategy for RestForOne {}
@@ -112,21 +133,22 @@ pub mod supervisor_strategy {
 
 #[async_trait]
 pub trait PuppetLifecycle: Puppet {
-    type SupervisionStrategy: SupervisorStrategy = supervisor_strategy::OneForOne;
+    type SupervisionStrategy: SupervisorStrategy = supervisor_strategy::OneToOne;
+
+    fn get_id(&self) -> Id {
+        TypeId::of::<Self>().into()
+    }
 
     fn set_status(&mut self, status: LifecycleStatus) {
         puppeter().set_status::<Self>(status);
     }
 
-    async fn start_master<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn start_tree(&mut self, sender: Id) -> Result<(), PuppeterError> {
         self.set_status(LifecycleStatus::Activating);
-        self.pre_start::<M>().await?;
-        self.start::<M>().await?;
+        self.pre_start().await?;
+        self.start().await?;
         self.set_status(LifecycleStatus::Active);
-        self.post_start::<M>().await?;
+        self.post_start().await?;
         self.start_puppets().await?;
         Ok(())
     }
@@ -136,7 +158,9 @@ pub trait PuppetLifecycle: Puppet {
         for id in puppets {
             if let Some(service_address) = puppeter().get_command_address_by_id(&id) {
                 service_address
-                    .send_command(ServiceCommand::InitiateStart)
+                    .send_command(ServiceCommand::InitiateStart {
+                        sender: self.get_id(),
+                    })
                     .await
                     .unwrap();
             }
@@ -144,15 +168,12 @@ pub trait PuppetLifecycle: Puppet {
         Ok(())
     }
 
-    async fn stop_master<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn stop_master(&mut self) -> Result<(), PuppeterError> {
         self.set_status(LifecycleStatus::Deactivating);
-        self.pre_stop::<M>().await?;
-        self.stop::<M>().await?;
+        self.pre_stop().await?;
+        self.stop().await?;
         self.set_status(LifecycleStatus::Inactive);
-        self.post_stop::<M>().await?;
+        self.post_stop().await?;
         Ok(())
     }
 
@@ -162,7 +183,9 @@ pub trait PuppetLifecycle: Puppet {
             if let Some(service_address) = puppeter().get_command_address_by_id(&id) {
                 service_address
                     .command_tx
-                    .send_and_await_response(ServiceCommand::InitiateStart)
+                    .send_and_await_response(ServiceCommand::InitiateStart {
+                        sender: self.get_id(),
+                    })
                     .await
                     .unwrap();
             }
@@ -177,13 +200,13 @@ pub trait PuppetLifecycle: Puppet {
         self.restart_puppets().await?;
         self.set_status(LifecycleStatus::Restarting);
         *self = Default::default();
-        self.pre_stop::<M>().await?;
-        self.stop::<M>().await?;
-        self.post_stop::<M>().await?;
-        self.pre_start::<M>().await?;
-        self.start::<M>().await?;
+        self.pre_stop().await?;
+        self.stop().await?;
+        self.post_stop().await?;
+        self.pre_start().await?;
+        self.start().await?;
         self.set_status(LifecycleStatus::Active);
-        self.post_start::<M>().await?;
+        self.post_start().await?;
         self.start_puppets().await?;
         Ok(())
     }
@@ -194,7 +217,9 @@ pub trait PuppetLifecycle: Puppet {
             if let Some(service_address) = puppeter().get_command_address_by_id(&id) {
                 service_address
                     .command_tx
-                    .send_and_await_response(ServiceCommand::RequestRestart)
+                    .send_and_await_response(ServiceCommand::RequestRestart {
+                        sender: self.get_id(),
+                    })
                     .await
                     .unwrap();
             }
@@ -202,10 +227,24 @@ pub trait PuppetLifecycle: Puppet {
         Ok(())
     }
 
-    async fn handle_puppet_failure<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn handle_puppet_failure(&mut self) -> Result<(), PuppeterError> {
+        match supervisor_strategy::SupervisionVariant::from_type::<Self>() {
+            supervisor_strategy::SupervisionVariant::OneToOne => {}
+            supervisor_strategy::SupervisionVariant::OneForAll => todo!(),
+            supervisor_strategy::SupervisionVariant::RestForOne => todo!(),
+        }
+        if Self::SupervisionStrategy == supervisor_strategy::OneToOne {
+            self.stop_master::<P>().await?;
+            puppeter().remove_master::<P, Self>();
+        } else if Self::SupervisionStrategy == supervisor_strategy::OneForAll {
+            self.stop_master::<P>().await?;
+            puppeter().remove_master::<P, Self>();
+            self.fail::<P>().await?;
+        } else if Self::SupervisionStrategy == supervisor_strategy::RestForOne {
+            self.fail::<P>().await?;
+            self.stop_master::<P>().await?;
+            puppeter().remove_master::<P, Self>();
+        }
         Ok(())
     }
 
@@ -218,21 +257,13 @@ pub trait PuppetLifecycle: Puppet {
         Ok(())
     }
 
-    async fn handle_command<M>(&mut self, cmd: ServiceCommand) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
-        tracing::debug!(
-            "Handling command {} from master {}",
-            cmd,
-            puppeter().get_puppet_name::<M>().unwrap()
-        );
+    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppeterError> {
         match cmd {
-            ServiceCommand::InitiateStart => self.start_master::<M>().await,
-            ServiceCommand::InitiateStop => self.stop_master::<M>().await,
-            ServiceCommand::RequestRestart => self.restart_master::<M>().await,
-            ServiceCommand::ForceTermination => self.master_suicide::<M>().await,
-            ServiceCommand::ReportFailure(failure) => self.,
+            ServiceCommand::InitiateStart { sender } => self.start_tree().await,
+            ServiceCommand::InitiateStop { sender } => self.stop_master().await,
+            ServiceCommand::RequestRestart { sender } => self.restart_master().await,
+            ServiceCommand::ForceTermination { sender } => self.master_suicide().await,
+            ServiceCommand::ReportFailure { sender, message } => self.handle_puppet_failure().await,
         }
     }
 }
@@ -243,90 +274,49 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         type_name::<Self>().to_string()
     }
 
-    async fn pre_start<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn pre_start(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn post_start<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn post_start(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn pre_stop<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn pre_stop(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
 
-    async fn post_stop<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
+    async fn post_stop(&mut self) -> Result<(), PuppeterError> {
         Ok(())
     }
-    async fn start<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-        M: Master,
-    {
-        tracing::debug!(
-            "Received start command for master: {}",
-            puppeter().get_puppet_name::<M>().unwrap()
-        );
+    async fn start(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!(
+        //     "Received start command for master: {}",
+        //     puppeter().get_puppet_name::<M>().unwrap()
+        // );
         tracing::debug!("Starting puppet: {}", self.name());
         Ok(())
     }
 
-    async fn stop<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
-        tracing::debug!(
-            "Received stop command for master: {}",
-            puppeter().get_puppet_name::<M>().unwrap()
-        );
+    async fn stop(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!(
+        //     "Received stop command for master: {}",
+        //     puppeter().get_puppet_name::<M>().unwrap()
+        // );
         tracing::debug!("Stopping puppet {}", self.name());
         Ok(())
     }
 
-    async fn restart<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
-        tracing::debug!(
-            "Received restart command for master: {}",
-            puppeter().get_puppet_name::<M>().unwrap()
-        );
+    async fn restart(&mut self) -> Result<(), PuppeterError> {
         tracing::debug!("Restarting puppet {}", self.name());
         Ok(())
     }
 
-    async fn fail<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
-        tracing::debug!(
-            "Received fail command for master: {}",
-            puppeter().get_puppet_name::<M>().unwrap()
-        );
-        tracing::debug!("Failing puppet {}", self.name());
-        Ok(())
-    }
-
-    async fn kill<M>(&mut self) -> Result<(), PuppeterError>
-    where
-        M: Master,
-    {
-        tracing::debug!(
-            "Received kill command for master: {}",
-            puppeter().get_puppet_name::<M>().unwrap()
-        );
+    async fn terminate(&mut self) -> Result<(), PuppeterError> {
+        // tracing::debug!(
+        //     "Received kill command for master: {}",
+        //     puppeter().get_puppet_name::<M>().unwrap()
+        // );
         tracing::debug!("Suicide puppet {}", self.name());
         Ok(())
     }
