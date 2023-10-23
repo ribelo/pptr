@@ -9,10 +9,14 @@ use thiserror::Error;
 
 use crate::{
     address::{CommandAddress, PuppetAddress},
+    errors::{
+        PermissionDenied, PuppetError, PuppeterSendCommandError, PuppeterSendMessageError,
+        PuppeterSpawnError,
+    },
     master::{puppeter, Master},
     message::{Mailbox, Message, ServiceCommand, ServiceMailbox},
     prelude::Puppeter,
-    Id, PermissionError, PuppetError,
+    Id,
 };
 
 static DEFAULT_BUFFER_SIZE: OnceLock<usize> = OnceLock::new();
@@ -163,26 +167,6 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         Ok(())
     }
 
-    async fn _handle_puppet_failure(&mut self, error: PuppetError) {
-        match error {
-            PuppetError::NonCritical(msg) => {
-                tracing::warn!("");
-            }
-            PuppetError::Critical(msg) => {
-                tracing::warn!("");
-                puppeter().report_failure::<Self>(error).await;
-            }
-            PuppetError::Fatal(msg) => {
-                tracing::error!("");
-                puppeter().report_failure::<Self>(error).await;
-            }
-        }
-    }
-
-    fn get_name<P: Master>(&self) -> Option<String> {
-        puppeter().get_puppet_name::<P>()
-    }
-
     fn get_status<P>(&self) -> Option<LifecycleStatus>
     where
         P: Puppet,
@@ -199,7 +183,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
     }
 
     async fn start(&mut self) -> Result<(), PuppetError> {
-        tracing::debug!("Starting puppet: {}", self.get_name::<Self>().unwrap());
+        tracing::debug!("Starting puppet: {}", type_name::<Self>());
         Ok(())
     }
 
@@ -212,7 +196,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
     }
 
     async fn stop(&mut self) -> Result<(), PuppetError> {
-        tracing::debug!("Stopping puppet {}", self.get_name::<Self>().unwrap());
+        tracing::debug!("Stopping puppet {}", type_name::<Self>());
         Ok(())
     }
 
@@ -221,31 +205,24 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
     }
 
     async fn restart(&mut self) -> Result<(), PuppetError> {
-        tracing::debug!("Restarting puppet {}", self.get_name::<Self>().unwrap());
+        tracing::debug!("Restarting puppet {}", type_name::<Self>());
         Ok(())
     }
 
     async fn suicide(&mut self) -> Result<(), PuppetError> {
-        tracing::debug!("Suicide puppet {}", self.get_name::<Self>().unwrap());
+        tracing::debug!("Suicide puppet {}", type_name::<Self>());
         Ok(())
     }
 
-    fn spawn(&self) -> Result<PuppetAddress<Self>, PermissionError> {
+    fn spawn(&self) -> Result<PuppetAddress<Self>, PuppeterSpawnError> {
         puppeter().spawn::<Puppeter, Self>(self.clone())
     }
 
     fn create<P: Puppet>(
         &self,
         puppet: impl Into<PuppetStruct<P>>,
-    ) -> Result<PuppetAddress<P>, PermissionError> {
+    ) -> Result<PuppetAddress<P>, PuppeterSpawnError> {
         puppeter().spawn::<Self, P>(puppet)
-    }
-
-    fn get_puppet_name<P>(&self) -> Option<String>
-    where
-        P: Master,
-    {
-        puppeter().get_puppet_name::<P>()
     }
 
     fn is_puppet_exists<M>(&self) -> bool
@@ -255,8 +232,8 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().is_puppet_exists::<M>()
     }
 
-    fn get_master<P>(&self) -> Id {
-        puppeter().get_master_by_id(&TypeId::of::<Self>().into())
+    fn get_master(&self) -> Id {
+        puppeter().get_master::<Self>()
     }
 
     fn has_puppet<P>(&self) -> Option<bool>
@@ -273,83 +250,54 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().get_address::<P>()
     }
 
-    fn get_command_address<P>(&self) -> Option<CommandAddress>
+    fn get_command_address<P>(&self) -> Result<Option<CommandAddress>, PermissionDenied>
     where
         P: Puppet,
     {
-        puppeter().get_command_address::<P>()
+        puppeter().get_command_address::<Self, P>()
     }
 
-    async fn send<P, E>(&self, message: E) -> Result<(), PuppetError>
+    async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError>
     where
         P: Handler<E>,
         E: Message,
     {
-        if let Err(err) = puppeter().send::<Self, P, E>(message).await {
-            self._handle_puppet_failure(PuppetError::NonCritical(err.to_string()))
-                .await;
-            Ok(())
-        } else {
-            Ok(())
-        }
+        puppeter().send::<P, E>(message).await
     }
 
-    async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppetError>
+    async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppeterSendMessageError>
     where
         P: Handler<E>,
         E: Message,
     {
-        match puppeter().ask::<P, E>(message).await {
-            Ok(_) => todo!(),
-            Err(_) => todo!(),
-        }
+        puppeter().ask::<P, E>(message).await
     }
 
     async fn ask_with_timeout<P, E>(
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<P::Response, PuppetError>
+    ) -> Result<P::Response, PuppeterSendMessageError>
     where
         P: Handler<E>,
         E: Message,
     {
-        puppeter()
-            .ask_with_timeout::<Self, P, E>(message, duration)
-            .await
+        puppeter().ask_with_timeout::<P, E>(message, duration).await
     }
 
-    async fn send_command<P>(&self, command: ServiceCommand) -> Result<(), PuppetError>
+    async fn send_command<P>(&self, command: ServiceCommand) -> Result<(), PuppeterSendCommandError>
     where
         P: Puppet,
     {
-        match (self.is_puppet_exists::<P>(), self.has_puppet::<P>()) {
-            (false, _) => {
-                Err(PermissionError::PuppetDoesNotExist(
-                    self.get_name::<P>().unwrap().into(),
-                ))
-            }
-            (true, Some(false)) => {
-                Err(PermissionError::PermissionDenied {
-                    master: self.get_name::<Self>().unwrap().into(),
-                    puppet: self.get_name::<P>().unwrap().into(),
-                    message: Some("Can't send command to puppet from another master.".to_string()),
-                })
-            }
-            (true, Some(true)) => {
-                puppeter().send_command::<Self, P>(command).await?;
-                Ok(())
-            }
-        }
+        puppeter().send_command::<Self, P>(command).await
     }
 
-    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PermissionError> {
+    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppetError> {
         match cmd {
             ServiceCommand::Start => self._start().await,
             ServiceCommand::Stop => self._stop().await,
             ServiceCommand::Restart => self._restart().await,
             ServiceCommand::Kill => self._suicide().await,
-            ServiceCommand::ReportFailure { puppet, message } => todo!(),
         }
     }
 }
@@ -359,29 +307,23 @@ pub trait Handler<M: Message>: Puppet {
     type Response: Send + 'static;
     type Exec: execution::ExecutionStrategy = execution::Sequential;
 
-    async fn try_handle_message(&mut self, msg: M) -> Result<Self::Response, PuppetError> {
-        match self.handle_message(msg).await {
-            Ok(response) => Ok(response),
-            Err(error) => {
-                self._handle_puppet_failure(error).await;
-                Err(error)
-            }
-        }
-    }
-
     async fn handle_message(&mut self, msg: M) -> Result<Self::Response, PuppetError>;
 }
 
 pub(crate) struct PuppetHandler<P: Puppet> {
     pub(crate) id: Id,
-    pub(crate) name: String,
     pub(crate) rx: Mailbox<P>,
     pub(crate) command_rx: ServiceMailbox,
 }
 
 impl<P: Puppet> fmt::Display for PuppetHandler<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Puppet {{ id: {}, name: {} }}", self.id, self.name)
+        write!(
+            f,
+            "Puppet {{ id: {}, name: {} }}",
+            self.id.id,
+            (self.id.get_name)()
+        )
     }
 }
 
@@ -389,7 +331,7 @@ impl<P: Puppet> fmt::Debug for PuppetHandler<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PuppetHandler")
             .field("id", &self.id)
-            .field("name", &self.name)
+            .field("name", &(&self.id.get_name)())
             .field("rx", &self.rx) // Dodaj, jeżeli Mailbox implementuje Debug
             .field("command_rx", &self.command_rx) // Dodaj, jeżeli ServiceMailbox implementuje Debug
             .finish()
@@ -397,7 +339,7 @@ impl<P: Puppet> fmt::Debug for PuppetHandler<P> {
 }
 
 pub struct PuppetStruct<P: Puppet> {
-    pub(crate) Puppet: P,
+    pub(crate) puppet: P,
     pub(crate) buffer_size: usize,
     pub(crate) commands_buffer_size: usize,
 }
@@ -405,7 +347,7 @@ pub struct PuppetStruct<P: Puppet> {
 impl<P: Puppet> PuppetStruct<P> {
     pub fn new(puppet: P) -> Self {
         Self {
-            Puppet: puppet,
+            puppet,
             buffer_size: *DEFAULT_BUFFER_SIZE.get_or_init(|| 1024),
             commands_buffer_size: *DEFAULT_SERVICE_BUFFER_SIZE.get_or_init(|| 1),
         }

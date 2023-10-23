@@ -1,11 +1,11 @@
 use std::{
     fmt::{self, Debug},
     marker::PhantomData,
-    ops::{Deref, DerefMut},
 };
 
 use crate::{
-    errors::{HandleMessageError, MessageError, PermissionError, PostmanError, PuppetError},
+    errors::{PostmanError, PuppetError},
+    master::puppeter,
     puppet::{self, Handler, Puppet},
     Id,
 };
@@ -24,19 +24,14 @@ pub enum ServiceCommand {
     Stop,
     Restart,
     Kill,
-    ReportFailure { puppet: Id, message: Option<String> },
 }
 
 impl Message for ServiceCommand {}
 
-pub type ReplyAddress<T> = oneshot::Sender<Result<T, PermissionError>>;
-pub type MaybeReplyAddress<T> = Option<ReplyAddress<T>>;
-pub type MessageResponse<P, H> = <H as Handler<P>>::Response;
-
 #[async_trait]
 pub trait Envelope<P: Puppet>: Send {
-    async fn handle_message(&mut self, puppet: &mut P) -> Result<(), HandleMessageError>;
-    async fn reply_error(&mut self, err: PuppetError) -> Result<(), MessageError>;
+    async fn handle_message(&mut self, puppet: &mut P);
+    async fn reply_error(&mut self, err: PuppetError);
 }
 
 pub struct Packet<P, M>
@@ -79,13 +74,16 @@ where
     P: Handler<M>,
     M: Message + 'static,
 {
-    async fn handle_message(&mut self, puppet: &mut P) -> Result<(), HandleMessageError> {
+    async fn handle_message(&mut self, puppet: &mut P) {
         let execution_variant = puppet::execution::ExecutionVariant::from_type::<P::Exec>();
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
         match execution_variant {
             puppet::execution::ExecutionVariant::Sequential => {
-                let response = puppet.try_handle_message(msg).await;
+                let response = puppet.handle_message(msg).await;
+                if let Err(error) = &response {
+                    puppeter().report_failure::<P>(error).await;
+                }
                 if let Some(reply_address) = reply_address {
                     reply_address
                         .send(response)
@@ -96,6 +94,9 @@ where
                 let mut cloned_minion = puppet.clone();
                 tokio::spawn(async move {
                     let response = cloned_minion.handle_message(msg).await;
+                    if let Err(error) = &response {
+                        puppeter().report_failure::<P>(error).await;
+                    }
                     if let Some(reply_address) = reply_address {
                         reply_address
                             .send(response)
@@ -108,6 +109,9 @@ where
                 let mut cloned_minion = puppet.clone();
                 rayon::spawn(move || {
                     let response = cloned_minion.handle_message(msg).block_on();
+                    if let Err(error) = &response {
+                        puppeter().report_failure::<P>(error).block_on();
+                    }
                     if let Some(reply_address) = reply_address {
                         reply_address
                             .send(response)
@@ -116,15 +120,11 @@ where
                 });
             }
         };
-        Ok(())
     }
-    async fn reply_error(&mut self, err: PuppetError) -> Result<(), MessageError> {
+    async fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
-            reply_address
-                .send(Err(err))
-                .unwrap_or_else(|_| println!("Message response send error"));
+            let _ = reply_address.send(Err(err));
         }
-        Ok(())
     }
 }
 
@@ -170,10 +170,7 @@ where
     }
 
     #[inline(always)]
-    pub async fn send_and_await_response<E>(
-        &self,
-        message: E,
-    ) -> Result<Result<A::Response, PuppetError>, PostmanError>
+    pub async fn send_and_await_response<E>(&self, message: E) -> Result<A::Response, PostmanError>
     where
         A: Handler<E>,
         E: Message + 'static,
@@ -187,7 +184,7 @@ where
             .map_err(|_| PostmanError::SendError)?;
 
         match res_rx.await {
-            Ok(response) => Ok(response),
+            Ok(response) => response.map_err(|e| e.into()),
             Err(_) => Err(PostmanError::ResponseReceiveError),
         }
     }
@@ -195,7 +192,7 @@ where
 
 pub struct ServicePacket {
     pub(crate) cmd: ServiceCommand,
-    pub(crate) reply_address: oneshot::Sender<Result<(), MessageError>>,
+    pub(crate) reply_address: oneshot::Sender<Result<(), PuppetError>>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,8 +208,8 @@ impl ServicePostman {
     pub async fn send_and_await_response(
         &self,
         command: ServiceCommand,
-    ) -> Result<(), MessageError> {
-        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<(), MessageError>>();
+    ) -> Result<(), PostmanError> {
+        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<(), PuppetError>>();
         let packet = ServicePacket {
             cmd: command,
             reply_address: res_tx,
@@ -220,12 +217,11 @@ impl ServicePostman {
         self.tx
             .send(packet)
             .await
-            .map_err(|_| MessageError::SendError)?;
+            .map_err(|_| PostmanError::SendError)?;
 
         match res_rx.await {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(err)) => Err(err),
-            Err(_) => Err(MessageError::ResponseReceiveError),
+            Ok(response) => response.map_err(|e| e.into()),
+            Err(_) => Err(PostmanError::ResponseReceiveError),
         }
     }
 }

@@ -49,7 +49,10 @@ impl std::hash::Hash for Id {
 }
 
 impl Id {
-    pub fn new<T>() -> Self {
+    pub fn new<T>() -> Self
+    where
+        T: 'static,
+    {
         let type_id = TypeId::of::<T>();
         let mut hasher = AHasher::default();
         type_id.hash(&mut hasher);
