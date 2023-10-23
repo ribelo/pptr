@@ -1,9 +1,10 @@
 use std::fmt;
 
 use crate::{
+    errors::MessageError,
     message::{Message, Postman, ServiceCommand, ServicePostman},
     puppet::{Handler, Puppet},
-    Id, PuppeterError,
+    Id,
 };
 
 #[derive(Debug)]
@@ -27,7 +28,7 @@ impl<P: Puppet> Clone for PuppetAddress<P> {
 }
 
 impl<P: Puppet> PuppetAddress<P> {
-    async fn send<E>(&self, message: E) -> Result<(), PuppeterError>
+    async fn send<E>(&self, message: E) -> Result<(), MessageError>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -35,7 +36,7 @@ impl<P: Puppet> PuppetAddress<P> {
         self.tx.send(message).await
     }
 
-    async fn ask<E>(&self, message: E) -> Result<<P>::Response, PuppeterError>
+    async fn ask<E>(&self, message: E) -> Result<P::Response, MessageError>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -47,14 +48,19 @@ impl<P: Puppet> PuppetAddress<P> {
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<<P>::Response, PuppeterError>
+    ) -> Result<P::Response, MessageError>
     where
         P: Handler<E>,
         E: Message + 'static,
     {
         tokio::select! {
-            response = self.tx.send_and_await_response(message) => response,
-            _ = tokio::time::sleep(duration) => Err(PuppeterError::MessageResponseTimeout),
+            result = self.tx.send_and_await_response(message) => {
+                match result {
+                    Ok(response) => Ok(response),
+                    Err(_) => Err(MessageError::SendError)
+                }
+            },
+            _ = tokio::time::sleep(duration) => Err(MessageError::ResponseTimeout),
         }
     }
 }
@@ -73,7 +79,7 @@ pub struct CommandAddress {
 }
 
 impl CommandAddress {
-    pub async fn send_command(&self, command: ServiceCommand) -> Result<(), PuppeterError> {
+    pub async fn send_command(&self, command: ServiceCommand) -> Result<(), MessageError> {
         self.command_tx.send_and_await_response(command).await
     }
 }
