@@ -1,10 +1,10 @@
 [package]
-name = "minions"
+name = "puppeter"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-minions-derive = { path = "./minions-derive", optional = true }
+puppeter-derive = { path = "./puppeter-derive", optional = true }
 rayon = { version = "1.8.0", optional = true }
 pollster = { version = "0.3.0", optional = true }
 ahash = "0.8"
