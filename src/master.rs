@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 use std::{
-    any::{type_name, Any, TypeId},
+    any::{type_name, TypeId},
     sync::{Arc, OnceLock, RwLock},
 };
 
@@ -14,235 +14,45 @@ use crate::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
     },
-    puppet::{Handler, LifecycleStatus, Puppet, PuppetHandler, PuppetLifecycle, PuppetStruct},
+    puppet::{
+        BoxedAny, Handler, LifecycleStatus, Puppet, PuppetHandler, PuppetLifecycle, PuppetStruct,
+    },
     Id, PuppeterError,
 };
 
-/// Type alias definitions in the Puppeter framework.
+pub static PUPPETER: OnceLock<Puppeter> = OnceLock::new();
 
-/// `BoxedAddress` is a type alias for a boxed dynamic object that implements traits for Any, Send
-/// and Sync. This boxed object represents address which could be of any type and safely share
-/// references across threads.
-pub type BoxedAddres = Box<dyn Any + Send + Sync>;
-
-/// `BoxedSupervisionStrategy`  is a type alias for a boxed dynamic object that implements traits
-/// for Any, Send and Sync. This signals that the object within the box  is a supervision strategy
-/// which could be of any type and safely share references across threads.
-pub type BoxedSupervisionStrategy = Box<dyn Any + Send + Sync>;
-
-/// `BoxedHandlerStrategy` is a type alias for a boxed dynamic object that implements traits for
-/// Any, Send and Sync. This denotes that the object is a handler strategy that could be of any
-/// type, and could be shared safely across multiple threads.
-pub type BoxedHandlerStrategy = Box<dyn Any + Send + Sync>;
-
-/// `BoxedState` is a type alias for a boxed dynamic object that implements traits for Any, Send
-/// and Sync. It represents the box carrying the state object which can be of any type and safely
-/// share references across threads.
-pub type BoxedState = Box<dyn Any + Send + Sync>;
-
-/// `MasterId` is a type alias for ID of specific objects related to the Puppeter framework. They
-/// are used as an Identifier for master, puppet, and state respectively. The exact type of `Id`
-/// depends on the specific implementation, but generally it is expected to be a unique identifier
-/// in the scope of the master or puppet.
-pub type MasterId = Id;
-
-/// `PuppetId` is a type alias for ID of specific objects related to the Puppeter framework. They
-/// are used as an Identifier for master, puppet, and state respectively. The exact type of `Id`
-/// depends on the specific implementation, but generally it is expected to be a unique identifier
-/// in the scope of the master or puppet.
-pub type PuppetId = Id;
-
-/// `StateId` is a type alias for ID of specific objects related to the Puppeter framework. They
-/// are used as an Identifier for master, puppet, and state respectively. The exact type of `Id`
-/// depends on the specific implementation, but generally it is expected to be a unique identifier
-/// in the scope of the master or puppet.
-pub type StateId = Id;
-
-/// Represents the runtime state of the Puppeter framework.
-///
-/// `Puppeter` struct is a thread-safe structure for managing all the metadata related to the
-/// actors (or puppets as referred in the struct) and their masters.
-///
-/// # Fields
-///
-/// * `puppet_names`: Mapping between PuppetId and its name.
-///
-/// * `puppet_statuses`: Dictating the lifecycle status of each puppet.
-///
-/// * `puppet_addresses`: Providing the Boxed actor address related to each PuppetId.
-///
-/// * `command_addresses`: Stores the command addresses used by each puppet.
-///
-/// * `supervision_strategies`: Holds the supervision strategies for each puppet.
-///
-/// * `handler_strategies`: Contains the handler strategies separately for every puppet.
-///
-/// * `master_to_puppets`: Maps MasterId to a set of associated PuppetId.
-///
-/// * `puppet_to_master`: Links each puppet to its master.
-///
-/// * `state`: Holds the provided states.
 #[derive(Clone, Debug, Default)]
 pub struct Puppeter {
-    pub(crate) puppet_names: Arc<RwLock<HashMap<PuppetId, String>>>,
-    pub(crate) puppet_statuses: Arc<RwLock<HashMap<PuppetId, LifecycleStatus>>>,
-    pub(crate) puppet_addresses: Arc<RwLock<HashMap<PuppetId, BoxedAddres>>>,
-    pub(crate) command_addresses: Arc<RwLock<HashMap<PuppetId, CommandAddress>>>,
-    pub(crate) supervision_strategies: Arc<RwLock<HashMap<PuppetId, BoxedSupervisionStrategy>>>,
-    pub(crate) handler_strategies: Arc<RwLock<HashMap<PuppetId, BoxedHandlerStrategy>>>,
-
-    pub(crate) master_to_puppets: Arc<RwLock<HashMap<MasterId, IndexSet<PuppetId>>>>,
-    pub(crate) puppet_to_master: Arc<RwLock<HashMap<PuppetId, MasterId>>>,
-
-    pub(crate) state: Arc<RwLock<HashMap<StateId, BoxedState>>>,
+    pub(crate) status: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
+    pub(crate) puppet_name: Arc<RwLock<HashMap<Id, String>>>,
+    pub(crate) puppet_address: Arc<RwLock<HashMap<Id, BoxedAny>>>,
+    pub(crate) command_address: Arc<RwLock<HashMap<Id, CommandAddress>>>,
+    pub(crate) master: Arc<RwLock<HashMap<Id, IndexSet<Id>>>>,
+    pub(crate) slave: Arc<RwLock<HashMap<Id, Id>>>,
+    pub(crate) state: Arc<RwLock<HashMap<Id, BoxedAny>>>,
 }
 
-/// Represents the main trait for acting as a manager of puppet/actor instances within the Puppeter
-/// framework.
-///
-/// This trait is used to ensure the working entity, in this case referred to as 'Master', can
-/// function within multiple threads, thus, it needs to comply with Send to allow transfer of
-/// ownership between threads, ensuring thread-safety which is critical in multi-threaded,
-/// data-driven applications. The entity should also have a 'static lifetime, meaning it needs to
-/// be available for the entire duration of the run-time of the application, in order to
-/// effectively manage the actor model.
-///
-/// # Example
-///
-/// ```
-/// struct MyMaster;
-///
-/// impl Master for MyMaster {
-///     // Implementation specifics here
-/// }
-///
-/// let my_master = MyMaster; // Now 'my_master' can manage Puppets/actors across threads with 'static lifetime
-/// ```
-///
-/// It's left up to the implementing type how exactly it fulfills the obligations of the `Master`
-/// role.
 pub trait Master: Send + 'static {}
 
 impl Master for Puppeter {}
 
-// STATUS
-
-impl Puppeter {
-    /// Returns the lifecycle status of a specific type of puppet.
-    ///
-    /// This function uses a type ID to look up the lifecycle status of a puppet within the
-    /// framework. If a puppet of the specified type exists, its `LifecycleStatus` is returned. If
-    /// no such puppet exists, then `None` is returned.
-    ///
-    /// Internally, this function calls the `get_status_by_id` method with the type ID of `P`.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `P`: The type of the puppet to get the lifecycle status of.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let status = puppet.get_status::<MyPuppet>();
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it cannot get the lifecycle status of the puppet, which can
-    /// occur if the framework fails to acquire a read lock on the puppet status.
-    pub fn get_status<P>(&self) -> Option<LifecycleStatus>
-    where
-        P: Puppet,
-    {
-        let id: Id = TypeId::of::<P>().into();
-        self.get_status_by_id(id)
-    }
-
-    /// Returns the lifecycle status of a puppet associated with the specified ID.
-    ///
-    /// This function obtains a read lock on the puppet_statuses hashmap, searches for the ID, then
-    /// returns a clone of the found lifecycle status. If the given id does not exist in the
-    /// hashmap, it returns None.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let status = puppet.get_status_by_id(Id);
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it fails to acquire the read lock on the puppet_statuses hashmap.
-    pub fn get_status_by_id(&self, id: Id) -> Option<LifecycleStatus> {
-        self.puppet_statuses
-            .read()
-            .expect("Failed to acquire read lock")
-            .get(&id)
-            .cloned()
-    }
-
-    pub fn set_status<P>(&self, status: LifecycleStatus) -> Option<LifecycleStatus>
-    where
-        P: Puppet,
-    {
-        let id: Id = TypeId::of::<P>().into();
-        self.set_status_by_id(id, status)
-    }
-
-    /// Sets the lifecycle status of an actor by its ID.
-    ///
-    /// This function acquires a write lock on the actor statuses and updates the status of the
-    /// given actor. If the actor doesn't exist, an `None` is returned.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let actor_id: Id = ...; // an existing actor ID.
-    /// let status = LifecycleStatus::Active; // an instance of `LifecycleStatus` enum.
-    /// puppeteer.set_status_by_id(actor_id, status);
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it fails to acquire the write lock on the `puppet_statuses`
-    /// map.
-    pub fn set_status_by_id(&self, id: Id, status: LifecycleStatus) -> Option<LifecycleStatus> {
-        self.puppet_statuses
-            .write()
-            .expect("Failed to acquire write lock")
-            .insert(id, status)
-    }
+pub fn puppeter() -> &'static Puppeter {
+    PUPPETER.get_or_init(Default::default)
 }
 
-/// INFO
-
 impl Puppeter {
-    /// Returns the name of the puppet, if it exists.
-    ///
-    /// This function is used to get the name of a puppet associated with a given master. When the
-    /// master is the `Puppeter` itself, it will return `Some("Puppeter")`. Otherwise, it will look
-    /// up the puppet map for the given master and return the name if exists.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// puppeter.get_puppet_name::<Master>();
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if a read lock on `puppet_names` cannot be acquired.
-    pub fn get_puppet_name<P>(&self) -> Option<String>
+    pub(crate) fn get_puppet_name<M>(&self) -> Option<String>
     where
-        P: Master,
+        M: Master,
     {
-        let puppeter: Id = TypeId::of::<P>().into();
-        let master: Id = TypeId::of::<P>().into();
-        if master == Self {
+        let puppeter: Id = TypeId::of::<M>().into();
+        let master: Id = TypeId::of::<M>().into();
+        if master == puppeter {
             Some("Puppeter".to_string())
         } else {
-            let id: Id = TypeId::of::<P>().into();
-            self.puppet_names
+            let id: Id = TypeId::of::<M>().into();
+            self.puppet_name
                 .read()
                 .expect("Failed to acquire read lock")
                 .get(&id)
@@ -250,43 +60,47 @@ impl Puppeter {
         }
     }
 
-    /// Checks whether a puppet actor of the given Master type is already present in the framework.
-    ///
-    /// This function checks the internal registry of puppet actors for
-    /// an entry associated with the provided Master type identifier.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let exists = framework.is_puppet_exists::<MyPuppet>();
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if the system fails to acquire a read lock on the internal puppet addresses
-    /// registry.
-    pub fn is_puppet_exists<M>(&self) -> bool
+    pub(crate) fn is_puppet_exists<M>(&self) -> bool
     where
         M: Master,
     {
         let id: Id = TypeId::of::<M>().into();
-        self.puppet_addresses
+        self.puppet_address
             .read()
             .expect("Failed to acquire read lock")
             .contains_key(&id)
             || id == TypeId::of::<Self>().into()
     }
-}
 
-/// ADDRESS
-
-impl Puppeter {
-    pub fn get_address<P>(&self) -> Option<PuppetAddress<P>>
+    pub(crate) fn get_status<P>(&self) -> Option<LifecycleStatus>
     where
         P: Puppet,
     {
         let id: Id = TypeId::of::<P>().into();
-        self.puppet_addresses
+        self.status
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&id)
+            .cloned()
+    }
+
+    pub(crate) fn set_status<P>(&self, status: LifecycleStatus) -> Option<LifecycleStatus>
+    where
+        P: Puppet,
+    {
+        let id: Id = TypeId::of::<P>().into();
+        self.status
+            .write()
+            .expect("Failed to acquire write lock")
+            .insert(id, status)
+    }
+
+    pub(crate) fn get_address<P>(&self) -> Option<PuppetAddress<P>>
+    where
+        P: Puppet,
+    {
+        let id: Id = TypeId::of::<P>().into();
+        self.puppet_address
             .read()
             .expect("Failed to acquire read lock")
             .get(&id)
@@ -294,107 +108,71 @@ impl Puppeter {
             .cloned()
     }
 
-    pub fn set_address<P>(&self, address: PuppetAddress<P>)
+    pub(crate) fn set_address<P>(&self, address: PuppetAddress<P>)
     where
         P: Puppet,
     {
         let id: Id = TypeId::of::<P>().into();
-        self.puppet_addresses
+        self.puppet_address
             .write()
             .expect("Failed to acquire write lock")
             .insert(id, Box::new(address));
     }
 
-    pub fn get_command_address<P>(&self) -> Option<CommandAddress>
+    pub(crate) fn get_command_address<A>(&self) -> Option<CommandAddress>
     where
-        P: Puppet,
+        A: Puppet,
     {
-        let id: Id = TypeId::of::<P>().into();
+        let id: Id = TypeId::of::<A>().into();
         self.get_command_address_by_id(&id)
     }
 
-    pub fn get_command_address_by_id(&self, id: &Id) -> Option<CommandAddress> {
-        self.command_addresses
+    pub(crate) fn get_command_address_by_id(&self, id: &Id) -> Option<CommandAddress> {
+        self.command_address
             .read()
             .expect("Failed to acquire read lock")
             .get(id)
             .cloned()
     }
 
-    pub fn set_command_address<P>(&self, command_address: CommandAddress)
+    pub(crate) fn set_command_address<P>(&self, command_address: CommandAddress)
     where
         P: Puppet,
     {
         let id: Id = TypeId::of::<P>().into();
-        self.command_addresses
+        self.command_address
             .write()
             .expect("Failed to acquire write lock")
             .insert(id, command_address);
     }
-}
 
-/// RELATIONS
-
-impl Puppeter {
-    pub fn get_master<P>(&self) -> Id
+    pub(crate) fn get_master<P>(&self) -> Id
     where
         P: Puppet,
     {
-        let puppet: Id = TypeId::of::<P>().into();
-        self.get_master_by_id(puppet)
-    }
-
-    pub fn get_master_by_id(&self, id: Id) -> Id {
-        self.puppet_to_master
+        let slave: Id = TypeId::of::<P>().into();
+        self.slave
             .read()
             .expect("Failed to acquire read lock")
-            .get(&id)
+            .get(&slave)
             .cloned()
             .unwrap()
     }
 
-    pub fn has_puppet<M, P>(&self) -> bool
-    where
-        M: Master,
-        P: Puppet,
-    {
-        let master: Id = TypeId::of::<M>().into();
-        let puppet: Id = TypeId::of::<P>().into();
-        self.master_to_puppets
-            .read()
-            .expect("Failed to acquire read lock")
-            .get(&master)
-            .map(|slaves| slaves.contains(&puppet))
-            .unwrap_or(false)
-    }
-
-    pub fn has_puppet_by_id(&self, master: Id, slave: Id) -> bool {
-        self.master_to_puppets
-            .read()
-            .expect("Failed to acquire read lock")
-            .get(&master)
-            .map(|slaves| slaves.contains(&slave))
-            .unwrap_or(false)
-    }
-
-    pub fn get_puppets<M>(&self) -> IndexSet<Id>
+    pub(crate) fn get_puppets<M>(&self) -> IndexSet<Id>
     where
         M: Master,
     {
         let master: Id = TypeId::of::<M>().into();
-        self.get_puppets_by_id(master)
-    }
-
-    pub fn get_puppets_by_id(&self, id: Id) -> IndexSet<Id> {
-        self.master_to_puppets
+        self.master
             .read()
             .expect("Failed to acquire read lock")
-            .get(&id)
+            .get(&master)
             .cloned()
             .unwrap_or_default()
     }
 
-    pub fn set_master<M, P>(&self)
+    pub(crate) fn set_master<M, P>(&self)
     where
         M: Master,
         P: Puppet,
@@ -404,20 +182,20 @@ impl Puppeter {
         self.set_master_by_id(master, slave);
     }
 
-    pub fn set_master_by_id(&self, master: Id, slave: Id) {
-        self.master_to_puppets
+    pub(crate) fn set_master_by_id(&self, master: Id, slave: Id) {
+        self.master
             .write()
             .expect("Failed to acquire write lock")
             .entry(master)
             .or_default()
             .insert(slave);
-        self.puppet_to_master
+        self.slave
             .write()
             .expect("Failed to acquire write lock")
             .insert(slave, master);
     }
 
-    pub fn remove_master<M, P>(&self)
+    pub(crate) fn remove_master<M, P>(&self)
     where
         M: Master,
         P: Puppet,
@@ -427,20 +205,20 @@ impl Puppeter {
         self.remove_master_by_id(master, slave);
     }
 
-    pub fn remove_master_by_id(&self, master: Id, slave: Id) {
-        self.master_to_puppets
+    pub(crate) fn remove_master_by_id(&self, master: Id, slave: Id) {
+        self.master
             .write()
             .expect("Failed to acquire write lock")
             .entry(master)
             .or_default()
             .remove(&slave);
-        self.puppet_to_master
+        self.slave
             .write()
             .expect("Failed to acquire write lock")
             .remove(&slave);
     }
 
-    pub fn release_puppet<M, P>(&self)
+    pub(crate) fn release_puppet<M, P>(&self)
     where
         M: Master,
         P: Puppet,
@@ -449,37 +227,18 @@ impl Puppeter {
         self.set_master::<Self, P>();
     }
 
-    pub fn release_puppet_by_id(&self, master: Id, slave: Id) {
+    pub(crate) fn release_puppet_by_id(&self, master: Id, slave: Id) {
         self.remove_master_by_id(master, slave);
         self.set_master_by_id(TypeId::of::<Self>().into(), slave);
     }
 
-    pub fn release_all_puppets<M>(&self)
-    where
-        M: Master,
-    {
-        let master: Id = TypeId::of::<M>().into();
-        self.release_all_puppets_by_id(master);
-    }
-
-    pub fn releasle_all_puppets_by_id(&self, master: Id) {
-        let puppets = self.get_puppets_by_id(master);
-        for puppet in puppets {
-            self.release_puppet_by_id(master, puppet);
-        }
-    }
-}
-
-/// LIFECYCLE
-
-impl Puppeter {
-    pub async fn start_puppets<M>(&self)
+    pub(crate) async fn start_puppets<M>(&self)
     where
         M: Puppet,
     {
         let master: Id = TypeId::of::<M>().into();
-        let slaves_option = self.master_to_puppets.read().unwrap().get(&master).cloned();
-        let command_addresses = self.command_addresses.read().unwrap().clone();
+        let slaves_option = self.master.read().unwrap().get(&master).cloned();
+        let command_addresses = self.command_address.read().unwrap().clone();
         if let Some(slaves) = slaves_option {
             for slave in slaves {
                 if let Some(service_address) = command_addresses.get(&slave) {
@@ -493,15 +252,15 @@ impl Puppeter {
         }
     }
 
-    pub async fn stop_puppets<M>(&self)
+    pub(crate) async fn stop_puppets<M>(&self)
     where
         M: Puppet,
     {
         let master: Id = TypeId::of::<M>().into();
 
-        let slaves_option = self.master_to_puppets.read().unwrap().get(&master).cloned();
+        let slaves_option = self.master.read().unwrap().get(&master).cloned();
 
-        let command_addresses = self.command_addresses.read().unwrap().clone();
+        let command_addresses = self.command_address.read().unwrap().clone();
 
         if let Some(slaves) = slaves_option {
             for slave in slaves.iter().rev() {
@@ -516,19 +275,19 @@ impl Puppeter {
         }
     }
 
-    pub async fn restart_puppets<M>(&self)
+    pub(crate) async fn restart_puppets<M>(&self)
     where
         M: Puppet,
     {
         let master: Id = TypeId::of::<M>().into();
-        let slaves_option = self.master_to_puppets.read().unwrap().get(&master).cloned();
-        let command_addresses = self.command_addresses.read().unwrap().clone();
+        let slaves_option = self.master.read().unwrap().get(&master).cloned();
+        let command_addresses = self.command_address.read().unwrap().clone();
         if let Some(slaves) = slaves_option {
             for slave in slaves {
                 if let Some(service_address) = command_addresses.get(&slave) {
                     service_address
                         .command_tx
-                        .send_and_await_response(ServiceCommand::RequestSelfRestart)
+                        .send_and_await_response(ServiceCommand::RequestRestart)
                         .await
                         .unwrap();
                 }
@@ -536,14 +295,14 @@ impl Puppeter {
         }
     }
 
-    pub async fn kill_puppets<M>(&self)
+    pub(crate) async fn kill_puppets<M>(&self)
     where
         M: Master,
     {
         let master: Id = TypeId::of::<M>().into();
-        let slaves_option = self.master_to_puppets.read().unwrap().get(&master).cloned();
+        let slaves_option = self.master.read().unwrap().get(&master).cloned();
 
-        let command_addresses = self.command_addresses.read().unwrap().clone();
+        let command_addresses = self.command_address.read().unwrap().clone();
 
         if let Some(slaves) = slaves_option {
             for slave in slaves {
@@ -557,10 +316,23 @@ impl Puppeter {
             }
         }
     }
-}
 
-impl Puppeter {
-    pub fn spawn<M, P>(
+    pub(crate) fn has_puppet<M, P>(&self) -> bool
+    where
+        M: Master,
+        P: Puppet,
+    {
+        let master: Id = TypeId::of::<M>().into();
+        let slave: Id = TypeId::of::<P>().into();
+        self.master
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&master)
+            .map(|slaves| slaves.contains(&slave))
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn spawn<M, P>(
         &self,
         puppet: impl Into<PuppetStruct<P>>,
     ) -> Result<PuppetAddress<P>, PuppeterError>
@@ -581,12 +353,12 @@ impl Puppeter {
             self.set_address::<P>(puppet_address.clone());
             self.set_command_address::<P>(command_address);
             self.set_master::<M, P>();
-            tokio::spawn(run_puppet_loop(self.clone(), puppet_struct.Puppet, handle));
+            tokio::spawn(run_puppet_loop(puppet_struct.Puppet, handle));
             Ok(puppet_address)
         }
     }
 
-    pub async fn send<M, P, E>(&self, message: E) -> Result<(), PuppeterError>
+    pub(crate) async fn send<M, P, E>(&self, message: E) -> Result<(), PuppeterError>
     where
         M: Master,
         P: Handler<E>,
@@ -607,7 +379,7 @@ impl Puppeter {
         }
     }
 
-    pub async fn ask<M, P, E>(&self, message: E) -> Result<P::Response, PuppeterError>
+    pub(crate) async fn ask<M, P, E>(&self, message: E) -> Result<P::Response, PuppeterError>
     where
         M: Master,
         P: Handler<E>,
@@ -628,7 +400,7 @@ impl Puppeter {
         }
     }
 
-    pub async fn ask_with_timeout<M, P, E>(
+    pub(crate) async fn ask_with_timeout<M, P, E>(
         &self,
         message: E,
         duration: std::time::Duration,
@@ -646,7 +418,10 @@ impl Puppeter {
         }
     }
 
-    pub async fn send_command<M, P>(&self, command: ServiceCommand) -> Result<(), PuppeterError>
+    pub(crate) async fn send_command<M, P>(
+        &self,
+        command: ServiceCommand,
+    ) -> Result<(), PuppeterError>
     where
         M: Master,
         P: Puppet,
@@ -663,7 +438,7 @@ impl Puppeter {
         }
     }
 
-    pub async fn send_command_by_id<M>(
+    pub(crate) async fn send_command_by_id<M>(
         &self,
         id: Id,
         command: ServiceCommand,
@@ -699,11 +474,57 @@ impl Puppeter {
     // }
 }
 
-pub(crate) async fn run_puppet_loop<P>(
-    puppeter: Puppeter,
-    mut puppet: P,
-    mut handle: PuppetHandler<P>,
-) where
+pub fn get_puppet_name<P>() -> Option<String>
+where
+    P: Puppet,
+{
+    puppeter().get_puppet_name::<P>()
+}
+
+pub fn is_puppet_exists<P>() -> bool
+where
+    P: Puppet,
+{
+    puppeter().is_puppet_exists::<P>()
+}
+
+pub fn get_status<P>() -> Option<LifecycleStatus>
+where
+    P: Puppet,
+{
+    puppeter().get_status::<P>()
+}
+
+pub fn get_address<P>() -> Option<PuppetAddress<P>>
+where
+    P: Puppet,
+{
+    puppeter().get_address::<P>()
+}
+
+pub fn get_command_address<P>() -> Option<CommandAddress>
+where
+    P: Puppet,
+{
+    puppeter().get_command_address::<P>()
+}
+
+pub fn get_master<P>() -> Id
+where
+    P: Puppet,
+{
+    puppeter().get_master::<P>()
+}
+
+pub fn get_puppets<M>() -> IndexSet<Id>
+where
+    M: Master,
+{
+    puppeter().get_puppets::<M>()
+}
+
+pub(crate) async fn run_puppet_loop<P>(mut puppet: P, mut handle: PuppetHandler<P>)
+where
     P: PuppetLifecycle,
 {
     puppet
@@ -712,7 +533,7 @@ pub(crate) async fn run_puppet_loop<P>(
         .unwrap_or_else(|err| panic!("{} failed to start. Err: {}", handle, err));
 
     loop {
-        let Some(status) = puppeter.get_status::<P>() else {
+        let Some(status) = PUPPETER.get().unwrap().get_status::<P>() else {
             break;
         };
         if status.should_wait_for_activation() {
@@ -785,67 +606,67 @@ mod tests {
 
     use super::*;
 
-    // #[tokio::test]
-    // async fn it_works() {
-    //     #[derive(Debug, Clone, Message)]
-    //     pub struct SleepMessage {
-    //         i: i32,
-    //     }
-    //
-    //     #[derive(Debug, Clone)]
-    //     pub struct SleepMessage2 {
-    //         i: i32,
-    //     }
-    //
-    //     impl Message for SleepMessage2 {}
-    //
-    //     #[derive(Debug, Default, Clone, Puppet, Master)]
-    //     pub struct SleepActor {
-    //         i: i32,
-    //     }
-    //
-    //     #[async_trait]
-    //     impl Handler<SleepMessage> for SleepActor {
-    //         type Response = i32;
-    //         type Exec = execution::Concurrent;
-    //         async fn handle_message(&mut self, msg: SleepMessage) -> i32 {
-    //             println!("SleepActor Received message: {:?}", msg);
-    //             // with_state(|i: Option<&i32>| {
-    //             //     if i.is_some() {
-    //             //         println!("SleepActor Context: {:?}", i);
-    //             //     }
-    //             // });
-    //             // with_state_mut(|i: Option<&mut i32>| {
-    //             //     *i.unwrap() += 1;
-    //             // });
-    //             tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
-    //             msg.i
-    //         }
-    //     }
-    //
-    //     SleepActor { i: 0 }.spawn();
-    //
-    //     puppeter()
-    //         .send::<Puppeter, SleepActor, _>(SleepMessage { i: 10 })
-    //         .await
-    //         .unwrap();
-    //     puppeter()
-    //         .send::<Puppeter, SleepActor, _>(SleepMessage { i: 10 })
-    //         .await
-    //         .unwrap();
-    //
-    //     // // provide_state::<i32>(0);
-    //     // // let mut set = tokio::task::JoinSet::new();
-    //     // for _ in 0..10 {
-    //     //     gru.send::<SleepActor, _>(SleepMessage { i: 10 })
-    //     //         .await
-    //     //         .unwrap();
-    //     //     // set.spawn(ask::<SleepActor, _>(SleepMessage { i: 10 }));
-    //     //     // set.spawn(ask::<TestActor>(TestMessage { i: 10 }));
-    //     // }
-    //     tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
-    //     // // while let Some(Ok(res)) = set.join_next().await {
-    //     // //     println!("Response: {:?}", res);
-    //     // // }
-    // }
+    #[tokio::test]
+    async fn it_works() {
+        #[derive(Debug, Clone, Message)]
+        pub struct SleepMessage {
+            i: i32,
+        }
+
+        #[derive(Debug, Clone)]
+        pub struct SleepMessage2 {
+            i: i32,
+        }
+
+        impl Message for SleepMessage2 {}
+
+        #[derive(Debug, Default, Clone, Puppet, Master)]
+        pub struct SleepActor {
+            i: i32,
+        }
+
+        #[async_trait]
+        impl Handler<SleepMessage> for SleepActor {
+            type Response = i32;
+            type Exec = execution::Concurrent;
+            async fn handle_message(&mut self, msg: SleepMessage) -> i32 {
+                println!("SleepActor Received message: {:?}", msg);
+                // with_state(|i: Option<&i32>| {
+                //     if i.is_some() {
+                //         println!("SleepActor Context: {:?}", i);
+                //     }
+                // });
+                // with_state_mut(|i: Option<&mut i32>| {
+                //     *i.unwrap() += 1;
+                // });
+                tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
+                msg.i
+            }
+        }
+
+        SleepActor { i: 0 }.spawn();
+
+        puppeter()
+            .send::<Puppeter, SleepActor, _>(SleepMessage { i: 10 })
+            .await
+            .unwrap();
+        puppeter()
+            .send::<Puppeter, SleepActor, _>(SleepMessage { i: 10 })
+            .await
+            .unwrap();
+
+        // // provide_state::<i32>(0);
+        // // let mut set = tokio::task::JoinSet::new();
+        // for _ in 0..10 {
+        //     gru.send::<SleepActor, _>(SleepMessage { i: 10 })
+        //         .await
+        //         .unwrap();
+        //     // set.spawn(ask::<SleepActor, _>(SleepMessage { i: 10 }));
+        //     // set.spawn(ask::<TestActor>(TestMessage { i: 10 }));
+        // }
+        tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
+        // // while let Some(Ok(res)) = set.join_next().await {
+        // //     println!("Response: {:?}", res);
+        // // }
+    }
 }

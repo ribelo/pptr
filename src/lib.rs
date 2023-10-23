@@ -19,7 +19,6 @@ pub mod master;
 pub mod message;
 pub mod puppet;
 pub mod state;
-pub mod supervision;
 
 #[derive(Debug, Error)]
 pub enum PuppeterError {

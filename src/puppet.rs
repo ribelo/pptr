@@ -54,6 +54,8 @@ impl LifecycleStatus {
 
 impl Copy for LifecycleStatus {}
 
+pub type BoxedAny = Box<dyn Any + Send + Sync>;
+
 pub mod execution {
     use std::any::TypeId;
 
@@ -94,6 +96,39 @@ pub mod execution {
             }
         }
     }
+}
+
+pub trait SupervisorStrategy {}
+
+pub mod supervisor_strategy {
+    pub struct OneToOne;
+    pub struct OneForAll;
+    pub struct RestForOne;
+
+    pub enum SupervisionVariant {
+        OneToOne,
+        OneForAll,
+        RestForOne,
+    }
+
+    impl SupervisionVariant {
+        pub fn from_type<P: 'static + ?Sized>() -> Self {
+            let type_id = std::any::TypeId::of::<P>();
+            if type_id == std::any::TypeId::of::<OneToOne>() {
+                Self::OneToOne
+            } else if type_id == std::any::TypeId::of::<OneForAll>() {
+                Self::OneForAll
+            } else if type_id == std::any::TypeId::of::<RestForOne>() {
+                Self::RestForOne
+            } else {
+                unreachable!()
+            }
+        }
+    }
+
+    impl super::SupervisorStrategy for OneToOne {}
+    impl super::SupervisorStrategy for OneForAll {}
+    impl super::SupervisorStrategy for RestForOne {}
 }
 
 #[async_trait]
@@ -182,7 +217,7 @@ pub trait PuppetLifecycle: Puppet {
             if let Some(service_address) = puppeter().get_command_address_by_id(&id) {
                 service_address
                     .command_tx
-                    .send_and_await_response(ServiceCommand::RequestSelfRestart {
+                    .send_and_await_response(ServiceCommand::RequestRestart {
                         sender: self.get_id(),
                     })
                     .await
@@ -226,8 +261,7 @@ pub trait PuppetLifecycle: Puppet {
         match cmd {
             ServiceCommand::InitiateStart { sender } => self.start_tree().await,
             ServiceCommand::InitiateStop { sender } => self.stop_master().await,
-            ServiceCommand::RequestSelfRestart { sender } => self.restart_master().await,
-            ServiceCommand::RequestTreeRestart { sender } => self.restart_master().await,
+            ServiceCommand::RequestRestart { sender } => self.restart_master().await,
             ServiceCommand::ForceTermination { sender } => self.master_suicide().await,
             ServiceCommand::ReportFailure { sender, message } => self.handle_puppet_failure().await,
         }
