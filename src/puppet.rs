@@ -1,11 +1,10 @@
 use core::fmt;
 use std::{
-    any::{type_name, Any, TypeId},
+    any::{type_name, Any},
     sync::OnceLock,
 };
 
 use async_trait::async_trait;
-use thiserror::Error;
 
 use crate::{
     address::{CommandAddress, PuppetAddress},
@@ -13,6 +12,7 @@ use crate::{
         PermissionDenied, PuppetError, PuppeterSendCommandError, PuppeterSendMessageError,
         PuppeterSpawnError,
     },
+    executor::{Executor, SequentialExecutor},
     master::{puppeter, Master},
     message::{Mailbox, Message, ServiceCommand, ServiceMailbox},
     prelude::Puppeter,
@@ -51,48 +51,6 @@ impl Copy for LifecycleStatus {}
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
 
-pub mod execution {
-    use std::any::TypeId;
-
-    pub trait ExecutionStrategy {}
-
-    pub struct Sequential;
-    pub struct Concurrent;
-    #[cfg(feature = "rayon")]
-    pub struct Parallel;
-
-    impl ExecutionStrategy for Sequential {}
-    impl ExecutionStrategy for Concurrent {}
-    #[cfg(feature = "rayon")]
-    impl ExecutionStrategy for Parallel {}
-
-    pub enum ExecutionVariant {
-        Sequential,
-        Concurrent,
-        #[cfg(feature = "rayon")]
-        Parallel,
-    }
-
-    impl ExecutionVariant {
-        pub fn from_type<P: 'static + ?Sized>() -> Self {
-            let type_id = TypeId::of::<P>();
-
-            if type_id == TypeId::of::<Sequential>() {
-                Self::Sequential
-            } else if type_id == TypeId::of::<Concurrent>() {
-                Self::Concurrent
-            } else {
-                #[cfg(feature = "rayon")]
-                if type_id == TypeId::of::<Parallel>() {
-                    return Self::Parallel;
-                }
-
-                unreachable!()
-            }
-        }
-    }
-}
-
 pub trait SupervisorStrategy {}
 
 pub mod supervisor_strategy {
@@ -130,7 +88,7 @@ pub mod supervisor_strategy {
 pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
     type SupervisorStrategy: SupervisorStrategy = supervisor_strategy::OneToOne;
 
-    async fn _start(&mut self) -> Result<(), PuppetError> {
+    async fn _start(&mut self) -> Result<(), PuppetError<Self>> {
         self.set_status(LifecycleStatus::Activating);
         self.pre_start().await?;
         self.start().await?;
@@ -139,7 +97,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         Ok(())
     }
 
-    async fn _stop(&mut self) -> Result<(), PuppetError> {
+    async fn _stop(&mut self) -> Result<(), PuppetError<Self>> {
         self.set_status(LifecycleStatus::Deactivating);
         self.pre_stop().await?;
         self.stop().await?;
@@ -148,7 +106,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         Ok(())
     }
 
-    async fn _restart(&mut self) -> Result<(), PuppetError> {
+    async fn _restart(&mut self) -> Result<(), PuppetError<Self>> {
         self.set_status(LifecycleStatus::Restarting);
         self.pre_stop().await?;
         self.stop().await?;
@@ -161,7 +119,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         Ok(())
     }
 
-    async fn _suicide(&mut self) -> Result<(), PuppetError> {
+    async fn _suicide(&mut self) -> Result<(), PuppetError<Self>> {
         self._stop().await?;
         // TODO:
         Ok(())
@@ -178,50 +136,50 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().set_status::<Self>(status)
     }
 
-    async fn pre_start(&mut self) -> Result<(), PuppetError> {
+    async fn pre_start(&mut self) -> Result<(), PuppetError<Self>> {
         Ok(())
     }
 
-    async fn start(&mut self) -> Result<(), PuppetError> {
+    async fn start(&mut self) -> Result<(), PuppetError<Self>> {
         tracing::debug!("Starting puppet: {}", type_name::<Self>());
         Ok(())
     }
 
-    async fn post_start(&mut self) -> Result<(), PuppetError> {
+    async fn post_start(&mut self) -> Result<(), PuppetError<Self>> {
         Ok(())
     }
 
-    async fn pre_stop(&mut self) -> Result<(), PuppetError> {
+    async fn pre_stop(&mut self) -> Result<(), PuppetError<Self>> {
         Ok(())
     }
 
-    async fn stop(&mut self) -> Result<(), PuppetError> {
+    async fn stop(&mut self) -> Result<(), PuppetError<Self>> {
         tracing::debug!("Stopping puppet {}", type_name::<Self>());
         Ok(())
     }
 
-    async fn post_stop(&mut self) -> Result<(), PuppetError> {
+    async fn post_stop(&mut self) -> Result<(), PuppetError<Self>> {
         Ok(())
     }
 
-    async fn restart(&mut self) -> Result<(), PuppetError> {
+    async fn restart(&mut self) -> Result<(), PuppetError<Self>> {
         tracing::debug!("Restarting puppet {}", type_name::<Self>());
         Ok(())
     }
 
-    async fn suicide(&mut self) -> Result<(), PuppetError> {
+    async fn suicide(&mut self) -> Result<(), PuppetError<Self>> {
         tracing::debug!("Suicide puppet {}", type_name::<Self>());
         Ok(())
     }
 
-    fn spawn(&self) -> Result<PuppetAddress<Self>, PuppeterSpawnError> {
+    fn spawn(&self) -> Result<PuppetAddress<Self>, PuppeterSpawnError<Self>> {
         puppeter().spawn::<Puppeter, Self>(self.clone())
     }
 
     fn create<P: Puppet>(
         &self,
         puppet: impl Into<PuppetStruct<P>>,
-    ) -> Result<PuppetAddress<P>, PuppeterSpawnError> {
+    ) -> Result<PuppetAddress<P>, PuppeterSpawnError<P>> {
         puppeter().spawn::<Self, P>(puppet)
     }
 
@@ -250,14 +208,14 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().get_address::<P>()
     }
 
-    fn get_command_address<P>(&self) -> Result<Option<CommandAddress>, PermissionDenied>
+    fn get_command_address<P>(&self) -> Result<Option<CommandAddress>, PermissionDenied<Self, P>>
     where
         P: Puppet,
     {
         puppeter().get_command_address::<Self, P>()
     }
 
-    async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError>
+    async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError<P>>
     where
         P: Handler<E>,
         E: Message,
@@ -265,7 +223,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().send::<P, E>(message).await
     }
 
-    async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppeterSendMessageError>
+    async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppeterSendMessageError<P>>
     where
         P: Handler<E>,
         E: Message,
@@ -277,7 +235,7 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<P::Response, PuppeterSendMessageError>
+    ) -> Result<P::Response, PuppeterSendMessageError<P>>
     where
         P: Handler<E>,
         E: Message,
@@ -285,14 +243,17 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().ask_with_timeout::<P, E>(message, duration).await
     }
 
-    async fn send_command<P>(&self, command: ServiceCommand) -> Result<(), PuppeterSendCommandError>
+    async fn send_command<P>(
+        &self,
+        command: ServiceCommand,
+    ) -> Result<(), PuppeterSendCommandError<Self, P>>
     where
         P: Puppet,
     {
         puppeter().send_command::<Self, P>(command).await
     }
 
-    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppetError> {
+    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppetError<Self>> {
         match cmd {
             ServiceCommand::Start => self._start().await,
             ServiceCommand::Stop => self._stop().await,
@@ -305,9 +266,9 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
 #[async_trait]
 pub trait Handler<M: Message>: Puppet {
     type Response: Send + 'static;
-    type Exec: execution::ExecutionStrategy = execution::Sequential;
+    type Executor: Executor<Self, M> = SequentialExecutor;
 
-    async fn handle_message(&mut self, msg: M) -> Result<Self::Response, PuppetError>;
+    async fn handle_message(&mut self, msg: M) -> Result<Self::Response, PuppetError<Self>>;
 }
 
 pub(crate) struct PuppetHandler<P: Puppet> {

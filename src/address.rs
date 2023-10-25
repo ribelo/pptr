@@ -1,7 +1,7 @@
 use std::fmt;
 
 use crate::{
-    errors::{MessageError, PostmanError, PuppetError},
+    errors::PostmanError,
     message::{Message, Postman, ServiceCommand, ServicePostman},
     puppet::{Handler, Puppet},
     Id,
@@ -26,7 +26,7 @@ impl<P: Puppet> Clone for PuppetAddress<P> {
 }
 
 impl<P: Puppet> PuppetAddress<P> {
-    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
+    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError<P>>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -34,7 +34,7 @@ impl<P: Puppet> PuppetAddress<P> {
         self.tx.send(message).await
     }
 
-    pub async fn ask<E>(&self, message: E) -> Result<P::Response, PostmanError>
+    pub async fn ask<E>(&self, message: E) -> Result<P::Response, PostmanError<P>>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -46,7 +46,7 @@ impl<P: Puppet> PuppetAddress<P> {
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<P::Response, PostmanError>
+    ) -> Result<P::Response, PostmanError<P>>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -76,7 +76,7 @@ pub struct CommandAddress {
 }
 
 impl CommandAddress {
-    pub async fn send_command(&self, command: ServiceCommand) -> Result<(), PostmanError> {
+    pub async fn send_command(&self, command: ServiceCommand) -> Result<(), PostmanError<P>> {
         self.command_tx.send_and_await_response(command).await
     }
 }

@@ -5,13 +5,12 @@ use std::{
 
 use crate::{
     errors::{PostmanError, PuppetError},
+    executor::Executor,
     master::puppeter,
     puppet::{self, Handler, Puppet},
     Id,
 };
 use async_trait::async_trait;
-#[cfg(feature = "rayon")]
-use pollster::FutureExt;
 #[cfg(feature = "rayon")]
 use rayon;
 use tokio::sync::{mpsc, oneshot};
@@ -31,7 +30,7 @@ impl Message for ServiceCommand {}
 #[async_trait]
 pub trait Envelope<P: Puppet>: Send {
     async fn handle_message(&mut self, puppet: &mut P);
-    async fn reply_error(&mut self, err: PuppetError);
+    async fn reply_error(&mut self, err: PuppetError<P>);
 }
 
 pub struct Packet<P, M>
@@ -40,7 +39,7 @@ where
     M: Message,
 {
     message: Option<M>,
-    reply_address: Option<oneshot::Sender<Result<P::Response, PuppetError>>>,
+    reply_address: Option<oneshot::Sender<Result<P::Response, PuppetError<P>>>>,
     _phantom: PhantomData<P>,
 }
 
@@ -58,7 +57,7 @@ where
     }
     pub fn with_reply(
         message: M,
-        reply_address: oneshot::Sender<Result<P::Response, PuppetError>>,
+        reply_address: oneshot::Sender<Result<P::Response, PuppetError<P>>>,
     ) -> Self {
         Self {
             message: Some(message),
@@ -75,53 +74,11 @@ where
     M: Message + 'static,
 {
     async fn handle_message(&mut self, puppet: &mut P) {
-        let execution_variant = puppet::execution::ExecutionVariant::from_type::<P::Exec>();
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
-        match execution_variant {
-            puppet::execution::ExecutionVariant::Sequential => {
-                let response = puppet.handle_message(msg).await;
-                if let Err(error) = &response {
-                    puppeter().report_failure::<P>(error).await;
-                }
-                if let Some(reply_address) = reply_address {
-                    reply_address
-                        .send(response)
-                        .unwrap_or_else(|_| println!("Message response send error"));
-                }
-            }
-            puppet::execution::ExecutionVariant::Concurrent => {
-                let mut cloned_minion = puppet.clone();
-                tokio::spawn(async move {
-                    let response = cloned_minion.handle_message(msg).await;
-                    if let Err(error) = &response {
-                        puppeter().report_failure::<P>(error).await;
-                    }
-                    if let Some(reply_address) = reply_address {
-                        reply_address
-                            .send(response)
-                            .unwrap_or_else(|_| println!("Message response send error"));
-                    };
-                });
-            }
-            #[cfg(feature = "rayon")]
-            puppet::execution::ExecutionVariant::Parallel => {
-                let mut cloned_minion = puppet.clone();
-                rayon::spawn(move || {
-                    let response = cloned_minion.handle_message(msg).block_on();
-                    if let Err(error) = &response {
-                        puppeter().report_failure::<P>(error).block_on();
-                    }
-                    if let Some(reply_address) = reply_address {
-                        reply_address
-                            .send(response)
-                            .unwrap_or_else(|_| println!("Message response send error"));
-                    };
-                });
-            }
-        };
+        if let Err(err) = P::Executor::execute_message(puppet, msg, reply_address).await {}
     }
-    async fn reply_error(&mut self, err: PuppetError) {
+    async fn reply_error(&mut self, err: PuppetError<P>) {
         if let Some(reply_address) = self.reply_address.take() {
             let _ = reply_address.send(Err(err));
         }
@@ -147,19 +104,19 @@ where
     }
 }
 
-impl<A> Postman<A>
+impl<P> Postman<P>
 where
-    A: Puppet,
+    P: Puppet,
 {
-    pub fn new(tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<A>>>) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>) -> Self {
         Self { tx }
     }
 
     #[inline(always)]
-    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
+    pub async fn send<M>(&self, message: M) -> Result<(), PostmanError<P>>
     where
-        A: Handler<E>,
-        E: Message + 'static,
+        P: Handler<M>,
+        M: Message + 'static,
     {
         let packet = Packet::without_reply(message);
         self.tx
@@ -170,12 +127,15 @@ where
     }
 
     #[inline(always)]
-    pub async fn send_and_await_response<E>(&self, message: E) -> Result<A::Response, PostmanError>
+    pub async fn send_and_await_response<M>(
+        &self,
+        message: M,
+    ) -> Result<P::Response, PostmanError<P>>
     where
-        A: Handler<E>,
-        E: Message + 'static,
+        P: Handler<M>,
+        M: Message + 'static,
     {
-        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<A::Response, PuppetError>>();
+        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<P::Response, PuppetError>>();
 
         let packet = Packet::with_reply(message, res_tx);
         self.tx

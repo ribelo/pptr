@@ -212,7 +212,9 @@ impl Puppeter {
             .insert(id, Box::new(address));
     }
 
-    pub fn get_command_address<M, P>(&self) -> Result<Option<CommandAddress>, PermissionDenied>
+    pub fn get_command_address<M, P>(
+        &self,
+    ) -> Result<Option<CommandAddress>, PermissionDenied<M, P>>
     where
         M: Master,
         P: Puppet,
@@ -226,7 +228,7 @@ impl Puppeter {
         &self,
         master: Id,
         puppet: Id,
-    ) -> Result<Option<CommandAddress>, PermissionDenied> {
+    ) -> Result<Option<CommandAddress>, PermissionDenied<M, P>> {
         match self.has_permission_by_id(master, puppet) {
             Some(true) => {
                 Ok(self
@@ -1025,9 +1027,9 @@ pub struct SleepActor {
 mod tests {
 
     use async_trait::async_trait;
-    use minions_derive::{Master, Message, Puppet};
+    use puppeter_derive::{Master, Message, Puppet};
 
-    use crate::prelude::execution;
+    use crate::executor;
 
     use super::*;
 
@@ -1053,7 +1055,7 @@ mod tests {
         #[async_trait]
         impl Handler<SleepMessage> for SleepActor {
             type Response = i32;
-            type Exec = execution::Concurrent;
+            type Executor = executor::SequentialExecutor;
             async fn handle_message(&mut self, msg: SleepMessage) -> Result<i32, PuppetError> {
                 println!("SleepActor Received message: {:?}", msg);
                 // with_state(|i: Option<&i32>| {

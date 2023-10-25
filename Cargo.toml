@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 puppeter-derive = { path = "./puppeter-derive", optional = true }
 rayon = { version = "1.8.0", optional = true }
-pollster = { version = "0.3.0", optional = true }
+# pollster = { version = "0.3.0", optional = true }
 ahash = "0.8"
 async-trait = "0.1"
 hashbrown = "0.14"
@@ -17,7 +17,7 @@ tracing = "0.1"
 indexmap = "2.0.2"
 
 [dev-dependencies]
-minions-derive = { path = "./minions-derive" }
+puppeter-derive = { path = "./puppeter-derive" }
 actix = "0.13.1"
 vin = "9.1"
 ractor = "0.9"
@@ -25,8 +25,8 @@ criterion = "0.5"
 coerce = "0.8.10"
 
 [features]
-derive = ["dep:minions-derive"]
-rayon = ["dep:rayon", "dep:pollster"]
+derive = ["dep:puppeter-derive"]
+rayon = ["dep:rayon"]
 
 [[bench]]
 name = "minions_bench"

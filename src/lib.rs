@@ -16,6 +16,7 @@ use thiserror::Error;
 
 pub mod address;
 pub mod errors;
+pub mod executor;
 pub mod master;
 pub mod message;
 pub mod puppet;
@@ -110,13 +111,13 @@ impl From<Id> for PuppetIdentifier {
 
 pub mod prelude {
     #[cfg(feature = "derive")]
-    pub use minions_derive::*;
+    pub use puppeter_derive::*;
 
     pub use crate::{
         address::PuppetAddress,
         master::Puppeter,
         message::{Message, ServiceCommand},
-        puppet::{execution, Puppet},
+        puppet::Puppet,
         // state::{expect_state, get_state, provide_state, with_state, with_state_mut},
     };
 }
