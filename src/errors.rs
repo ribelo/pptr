@@ -131,7 +131,9 @@ where
     }
 
     pub fn message_or_default(&self) -> String {
-        self.message.unwrap_or_else(|| "No message".to_string())
+        self.message
+            .clone()
+            .unwrap_or_else(|| "No message".to_string())
     }
 }
 

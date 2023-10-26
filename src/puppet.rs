@@ -172,16 +172,16 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         Ok(())
     }
 
-    fn spawn(&self) -> Result<PuppetAddress<Self>, PuppeterSpawnError<Self>> {
-        puppeter().spawn::<Puppeter, Self>(self.clone())
-    }
-
-    fn create<P: Puppet>(
-        &self,
-        puppet: impl Into<PuppetStruct<P>>,
-    ) -> Result<PuppetAddress<P>, PuppeterSpawnError<P>> {
-        puppeter().spawn::<Self, P>(puppet)
-    }
+    // fn spawn(&self) -> Result<PuppetAddress<Self>, PuppeterSpawnError<Self>> {
+    //     puppeter().spawn::<Puppeter, Self>(self.clone())
+    // }
+    //
+    // fn create<P: Puppet>(
+    //     &self,
+    //     puppet: impl Into<PuppetStruct<P>>,
+    // ) -> Result<PuppetAddress<P>, PuppeterSpawnError<P>> {
+    //     puppeter().spawn::<Self, P>(puppet)
+    // }
 
     fn is_puppet_exists<M>(&self) -> bool
     where
@@ -190,23 +190,23 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().is_puppet_exists::<M>()
     }
 
-    fn get_master(&self) -> Id {
-        puppeter().get_master::<Self>()
-    }
+    // fn get_master(&self) -> Id {
+    //     puppeter().get_master::<Self>()
+    // }
 
-    fn has_puppet<P>(&self) -> Option<bool>
-    where
-        P: Puppet,
-    {
-        puppeter().has_puppet::<Self, P>()
-    }
+    // fn has_puppet<P>(&self) -> Option<bool>
+    // where
+    //     P: Puppet,
+    // {
+    //     puppeter().has_puppet::<Self, P>()
+    // }
 
-    fn get_address<P>(&self) -> Option<PuppetAddress<P>>
-    where
-        P: Puppet,
-    {
-        puppeter().get_address::<P>()
-    }
+    // fn get_address<P>(&self) -> Option<PuppetAddress<P>>
+    // where
+    //     P: Puppet,
+    // {
+    //     puppeter().get_address::<P>()
+    // }
 
     // TODO:
 
@@ -217,43 +217,43 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
     //     puppeter().get_command_address::<Self, P>()
     // }
 
-    async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError<P>>
-    where
-        P: Handler<E>,
-        E: Message,
-    {
-        puppeter().send::<P, E>(message).await
-    }
-
-    async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppeterSendMessageError<P>>
-    where
-        P: Handler<E>,
-        E: Message,
-    {
-        puppeter().ask::<P, E>(message).await
-    }
-
-    async fn ask_with_timeout<P, E>(
-        &self,
-        message: E,
-        duration: std::time::Duration,
-    ) -> Result<P::Response, PuppeterSendMessageError<P>>
-    where
-        P: Handler<E>,
-        E: Message,
-    {
-        puppeter().ask_with_timeout::<P, E>(message, duration).await
-    }
-
-    async fn send_command<P>(
-        &self,
-        command: ServiceCommand,
-    ) -> Result<(), PuppeterSendCommandError<Self, P>>
-    where
-        P: Puppet,
-    {
-        puppeter().send_command::<Self, P>(command).await
-    }
+    // async fn send<P, E>(&self, message: E) -> Result<(),
+    // PuppeterSendMessageError<P>> where
+    //     P: Handler<E>,
+    //     E: Message,
+    // {
+    //     puppeter().send::<P, E>(message).await
+    // }
+    //
+    // async fn ask<P, E>(&self, message: E) -> Result<P::Response,
+    // PuppeterSendMessageError<P>> where
+    //     P: Handler<E>,
+    //     E: Message,
+    // {
+    //     puppeter().ask::<P, E>(message).await
+    // }
+    //
+    // async fn ask_with_timeout<P, E>(
+    //     &self,
+    //     message: E,
+    //     duration: std::time::Duration,
+    // ) -> Result<P::Response, PuppeterSendMessageError<P>>
+    // where
+    //     P: Handler<E>,
+    //     E: Message,
+    // {
+    //     puppeter().ask_with_timeout::<P, E>(message, duration).await
+    // }
+    //
+    // async fn send_command<P>(
+    //     &self,
+    //     command: ServiceCommand,
+    // ) -> Result<(), PuppeterSendCommandError<Self, P>>
+    // where
+    //     P: Puppet,
+    // {
+    //     puppeter().send_command::<Self, P>(command).await
+    // }
 
     async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppetError<Self>> {
         match cmd {
