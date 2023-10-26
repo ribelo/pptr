@@ -13,10 +13,10 @@ use crate::{
         PuppeterSpawnError,
     },
     executor::{Executor, SequentialExecutor},
-    master::{puppeter, Master},
+    id::Id,
+    master::Master,
     message::{Mailbox, Message, ServiceCommand, ServiceMailbox},
     prelude::Puppeter,
-    Id,
 };
 
 static DEFAULT_BUFFER_SIZE: OnceLock<usize> = OnceLock::new();
@@ -51,90 +51,9 @@ impl Copy for LifecycleStatus {}
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
 
-pub trait SupervisorStrategy {}
-
-pub mod supervisor_strategy {
-    pub struct OneToOne;
-    pub struct OneForAll;
-    pub struct RestForOne;
-
-    pub enum SupervisionVariant {
-        OneToOne,
-        OneForAll,
-        RestForOne,
-    }
-
-    impl SupervisionVariant {
-        pub fn from_type<P: 'static + ?Sized>() -> Self {
-            let type_id = std::any::TypeId::of::<P>();
-            if type_id == std::any::TypeId::of::<OneToOne>() {
-                Self::OneToOne
-            } else if type_id == std::any::TypeId::of::<OneForAll>() {
-                Self::OneForAll
-            } else if type_id == std::any::TypeId::of::<RestForOne>() {
-                Self::RestForOne
-            } else {
-                unreachable!()
-            }
-        }
-    }
-
-    impl super::SupervisorStrategy for OneToOne {}
-    impl super::SupervisorStrategy for OneForAll {}
-    impl super::SupervisorStrategy for RestForOne {}
-}
-
 #[async_trait]
 pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
-    type SupervisorStrategy: SupervisorStrategy = supervisor_strategy::OneToOne;
-
-    async fn _start(&mut self) -> Result<(), PuppetError<Self>> {
-        self.set_status(LifecycleStatus::Activating);
-        self.pre_start().await?;
-        self.start().await?;
-        self.set_status(LifecycleStatus::Active);
-        self.post_start().await?;
-        Ok(())
-    }
-
-    async fn _stop(&mut self) -> Result<(), PuppetError<Self>> {
-        self.set_status(LifecycleStatus::Deactivating);
-        self.pre_stop().await?;
-        self.stop().await?;
-        self.set_status(LifecycleStatus::Inactive);
-        self.post_stop().await?;
-        Ok(())
-    }
-
-    async fn _restart(&mut self) -> Result<(), PuppetError<Self>> {
-        self.set_status(LifecycleStatus::Restarting);
-        self.pre_stop().await?;
-        self.stop().await?;
-        self.post_stop().await?;
-        *self = Default::default();
-        self.pre_start().await?;
-        self.start().await?;
-        self.set_status(LifecycleStatus::Active);
-        self.post_start().await?;
-        Ok(())
-    }
-
-    async fn _suicide(&mut self) -> Result<(), PuppetError<Self>> {
-        self._stop().await?;
-        // TODO:
-        Ok(())
-    }
-
-    fn get_status<P>(&self) -> Option<LifecycleStatus>
-    where
-        P: Puppet,
-    {
-        puppeter().get_status::<P>()
-    }
-
-    fn set_status(&self, status: LifecycleStatus) -> Option<LifecycleStatus> {
-        puppeter().set_status::<Self>(status)
-    }
+    // type SupervisorStrategy: SupervisorStrategy = supervisor_strategy::OneToOne;
 
     async fn pre_start(&mut self) -> Result<(), PuppetError<Self>> {
         Ok(())
@@ -170,98 +89,6 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
     async fn suicide(&mut self) -> Result<(), PuppetError<Self>> {
         tracing::debug!("Suicide puppet {}", type_name::<Self>());
         Ok(())
-    }
-
-    // fn spawn(&self) -> Result<PuppetAddress<Self>, PuppeterSpawnError<Self>> {
-    //     puppeter().spawn::<Puppeter, Self>(self.clone())
-    // }
-    //
-    // fn create<P: Puppet>(
-    //     &self,
-    //     puppet: impl Into<PuppetStruct<P>>,
-    // ) -> Result<PuppetAddress<P>, PuppeterSpawnError<P>> {
-    //     puppeter().spawn::<Self, P>(puppet)
-    // }
-
-    fn is_puppet_exists<M>(&self) -> bool
-    where
-        M: Master,
-    {
-        puppeter().is_puppet_exists::<M>()
-    }
-
-    // fn get_master(&self) -> Id {
-    //     puppeter().get_master::<Self>()
-    // }
-
-    // fn has_puppet<P>(&self) -> Option<bool>
-    // where
-    //     P: Puppet,
-    // {
-    //     puppeter().has_puppet::<Self, P>()
-    // }
-
-    // fn get_address<P>(&self) -> Option<PuppetAddress<P>>
-    // where
-    //     P: Puppet,
-    // {
-    //     puppeter().get_address::<P>()
-    // }
-
-    // TODO:
-
-    // fn get_command_address<P>(&self) -> Result<Option<CommandAddress<P>>,
-    // PermissionDenied<Self, P>> where
-    //     P: Puppet,
-    // {
-    //     puppeter().get_command_address::<Self, P>()
-    // }
-
-    // async fn send<P, E>(&self, message: E) -> Result<(),
-    // PuppeterSendMessageError<P>> where
-    //     P: Handler<E>,
-    //     E: Message,
-    // {
-    //     puppeter().send::<P, E>(message).await
-    // }
-    //
-    // async fn ask<P, E>(&self, message: E) -> Result<P::Response,
-    // PuppeterSendMessageError<P>> where
-    //     P: Handler<E>,
-    //     E: Message,
-    // {
-    //     puppeter().ask::<P, E>(message).await
-    // }
-    //
-    // async fn ask_with_timeout<P, E>(
-    //     &self,
-    //     message: E,
-    //     duration: std::time::Duration,
-    // ) -> Result<P::Response, PuppeterSendMessageError<P>>
-    // where
-    //     P: Handler<E>,
-    //     E: Message,
-    // {
-    //     puppeter().ask_with_timeout::<P, E>(message, duration).await
-    // }
-    //
-    // async fn send_command<P>(
-    //     &self,
-    //     command: ServiceCommand,
-    // ) -> Result<(), PuppeterSendCommandError<Self, P>>
-    // where
-    //     P: Puppet,
-    // {
-    //     puppeter().send_command::<Self, P>(command).await
-    // }
-
-    async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppetError<Self>> {
-        match cmd {
-            ServiceCommand::Start => self._start().await,
-            ServiceCommand::Stop => self._stop().await,
-            ServiceCommand::Restart => self._restart().await,
-            ServiceCommand::Kill => self._suicide().await,
-        }
     }
 }
 

@@ -2,9 +2,10 @@ use std::fmt;
 
 use crate::{
     errors::PostmanError,
+    id::Pid,
     message::{Message, Postman, ServiceCommand, ServicePostman},
     puppet::{Handler, Puppet},
-    Id,
+    puppet_box::{PuppetBox, PuppetState},
 };
 
 #[derive(Debug)]
@@ -12,7 +13,7 @@ pub struct PuppetAddress<P>
 where
     P: Puppet,
 {
-    pub id: Id,
+    pub id: Pid,
     pub(crate) tx: Postman<P>,
     pub(crate) command_tx: ServicePostman<P>,
 }
@@ -68,5 +69,19 @@ impl<P: Puppet> fmt::Display for PuppetAddress<P> {
             self.id.id,
             String::from(self.id)
         )
+    }
+}
+
+impl<S> From<PuppetBox<S>> for PuppetAddress<PuppetBox<S>>
+where
+    S: PuppetState,
+    PuppetBox<S>: Puppet,
+{
+    fn from(puppet_box: PuppetBox<S>) -> Self {
+        PuppetAddress {
+            id: Pid::new::<PuppetBox<S>>(),
+            tx: puppet_box.message_tx.clone(),
+            command_tx: puppet_box.command_tx.clone(),
+        }
     }
 }

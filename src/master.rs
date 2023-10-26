@@ -7,7 +7,7 @@ use std::{
 
 use hashbrown::HashMap;
 use indexmap::IndexSet;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     address::PuppetAddress,
@@ -16,22 +16,22 @@ use crate::{
         PuppetDoesNotExist, PuppetError, PuppeterSendCommandError, PuppeterSendMessageError,
         PuppeterSpawnError, ResetPuppetError, StartPuppetError, StopPuppetError,
     },
+    id::{Id, Pid},
     message::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
     },
     puppet::{BoxedAny, Handler, LifecycleStatus, Puppet, PuppetHandler, PuppetStruct},
-    Id,
+    puppet_box::{BoxedPuppet, PuppetBox, PuppetState},
 };
 
 pub static PUPPETER: OnceLock<Puppeter> = OnceLock::new();
 
 #[derive(Clone, Debug, Default)]
 pub struct Puppeter {
-    pub(crate) puppet_statuses: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
-    pub(crate) puppet_addresses: Arc<RwLock<HashMap<Id, BoxedAny>>>,
-    pub(crate) master_to_puppets: Arc<RwLock<HashMap<Id, IndexSet<Id>>>>,
-    pub(crate) puppet_to_master: Arc<RwLock<HashMap<Id, Id>>>,
+    pub(crate) puppets: Arc<RwLock<HashMap<Pid, BoxedPuppet>>>,
+    pub(crate) master_to_puppets: Arc<RwLock<HashMap<Id, IndexSet<Pid>>>>,
+    pub(crate) puppet_to_master: Arc<RwLock<HashMap<Pid, Id>>>,
     pub(crate) state: Arc<RwLock<HashMap<Id, BoxedAny>>>,
 }
 
@@ -39,251 +39,263 @@ pub trait Master: Send + 'static {}
 
 impl Master for Puppeter {}
 
-pub fn puppeter() -> &'static Puppeter {
-    PUPPETER.get_or_init(Default::default)
-}
-
-impl Puppeter {
-    pub fn new() -> Self {
-        PUPPETER.get_or_init(Default::default).clone()
-    }
-}
-
 // STATUS
 
 impl Puppeter {
-    pub(crate) fn get_status<P>(&self) -> Option<LifecycleStatus>
+    pub fn get_puppet<S>(&self) -> Option<PuppetBox<S>>
     where
-        P: Puppet,
+        PuppetBox<S>: Puppet,
+        S: PuppetState,
     {
-        let id = Id::new::<P>();
-        self.puppet_statuses
+        let id = Pid::new::<PuppetBox<S>>();
+        self.puppets
             .read()
             .expect("Failed to acquire read lock")
             .get(&id)
-            .cloned()
+            .map(|boxed| unsafe { *boxed.downcast_unchecked::<PuppetBox<S>>() })
     }
 
-    pub(crate) fn set_status<P>(&self, status: LifecycleStatus) -> Option<LifecycleStatus>
+    pub(crate) fn get_status<S>(&self) -> Option<LifecycleStatus>
     where
-        P: Puppet,
+        S: PuppetState,
+        PuppetBox<S>: Puppet,
     {
-        let id = Id::new::<P>();
-        self.puppet_statuses
-            .write()
-            .expect("Failed to acquire write lock")
-            .insert(id, status)
+        let id = Pid::new::<PuppetBox<S>>();
+        self.get_puppet::<S>()
+            .map(|puppet| *puppet.status_rx.borrow())
+    }
+
+    pub(crate) fn set_status<S>(&self, status: LifecycleStatus)
+    where
+        S: PuppetState,
+        PuppetBox<S>: Puppet,
+    {
+        let id = Pid::new::<PuppetBox<S>>();
+        self.get_puppet()
+            .map(|puppet| puppet.status_tx.send(status));
     }
 }
 
 /// INFO
 
 impl Puppeter {
-    pub fn is_puppet_exists<M>(&self) -> bool
+    pub fn is_puppet_exists<S>(&self) -> bool
     where
-        M: Master,
+        S: PuppetState,
+        PuppetBox<S>: Puppet,
     {
-        let id = Id::new::<M>();
-        self.puppet_addresses
-            .read()
-            .expect("Failed to acquire read lock")
-            .contains_key(&id)
-            || id == Id::new::<Self>()
+        let id = Pid::new::<PuppetBox<S>>();
+        self.get_puppet().is_some()
     }
 }
 
 /// ADDRESS
 
 impl Puppeter {
-    // pub fn get_address<P>(&self) -> Option<PuppetAddress<P>>
-    // where
-    //     P: Puppet,
-    // {
-    //     let id = Id::new::<P>();
-    //     self.puppet_addresses
-    //         .read()
-    //         .expect("Failed to acquire read lock")
-    //         .get(&id)
-    //         .and_then(|boxed_any| boxed_any.downcast_ref::<PuppetAddress<P>>())
-    //         .cloned()
-    // }
-    //
-    // pub fn set_address<P>(&self, address: PuppetAddress<P>)
-    // where
-    //     P: Puppet,
-    // {
-    //     let id = Id::new::<P>();
-    //     self.puppet_addresses
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .insert(id, Box::new(address));
-    // }
+    pub fn get_address<S>(&self) -> Option<PuppetAddress<PuppetBox<S>>>
+    where
+        S: PuppetState,
+        PuppetBox<S>: Puppet,
+    {
+        self.get_puppet::<S>().map(PuppetAddress::from)
+    }
 }
 
 /// RELATIONS
 
 impl Puppeter {
-    // pub fn get_master<P>(&self) -> Id
-    // where
-    //     P: Puppet,
-    // {
-    //     let id = Id::new::<P>();
-    //     self.puppet_to_master
-    //         .read()
-    //         .expect("Failed to acquire read lock")
-    //         .get(&id)
-    //         .cloned()
-    //         .unwrap()
-    // }
-    //
-    // pub fn set_master<M, P>(&self)
-    // where
-    //     M: Master,
-    //     P: Puppet,
-    // {
-    //     let master = Id::new::<M>();
-    //     let puppet = Id::new::<P>();
-    //     self.master_to_puppets
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .entry(master)
-    //         .or_default()
-    //         .insert(puppet);
-    //     self.puppet_to_master
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .insert(puppet, master);
-    // }
-    //
-    // pub fn remove_puppet<M, P>(&self)
-    // where
-    //     M: Master,
-    //     P: Puppet,
-    // {
-    //     let master = Id::new::<M>();
-    //     let puppet = Id::new::<P>();
-    //     self.puppet_statuses
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .remove(&puppet);
-    //     self.puppet_addresses
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .remove(&puppet);
-    //     self.master_to_puppets
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .entry(master)
-    //         .or_default()
-    //         .remove(&puppet);
-    //     self.puppet_to_master
-    //         .write()
-    //         .expect("Failed to acquire write lock")
-    //         .remove(&puppet);
-    // }
-    //
-    // pub fn has_puppet<M, P>(&self) -> Option<bool>
-    // where
-    //     M: Master,
-    //     P: Puppet,
-    // {
-    //     let master = Id::new::<M>();
-    //     let puppet = Id::new::<P>();
-    //     self.master_to_puppets
-    //         .read()
-    //         .expect("Failed to acquire read lock")
-    //         .get(&master)
-    //         .map(|puppets| puppets.contains(&puppet))
-    // }
-    //
-    // pub fn get_puppets<M>(&self) -> IndexSet<Id>
-    // where
-    //     M: Master,
-    // {
-    //     let id = Id::new::<M>();
-    //     self.master_to_puppets
-    //         .read()
-    //         .expect("Failed to acquire read lock")
-    //         .get(&id)
-    //         .cloned()
-    //         .unwrap_or_default()
-    // }
-    //
-    // pub fn release_puppet<M, P>(&self)
-    // where
-    //     M: Master,
-    //     P: Puppet,
-    // {
-    //     self.remove_puppet::<M, P>();
-    //     self.set_master::<Self, P>();
-    // }
-    //
-    // // TODO:
-    //
-    // // pub fn release_all_puppets<M>(&self)
-    // // where
-    // //     M: Master,
-    // // {
-    // //     let master = Id::new::<M>();
-    // //     self.release_all_puppets_by_id(master);
-    // // }
-    //
-    // pub fn has_permission<M, P>(&self) -> Option<bool>
-    // where
-    //     M: Master,
-    //     P: Puppet,
-    // {
-    //     let master = Id::new::<M>();
-    //     let puppet = Id::new::<P>();
-    //     if let Some(has) = self.has_puppet::<M, P>() {
-    //         let puppeter_id = Id::new::<Self>();
-    //         Some(has || master == puppeter_id)
-    //     } else {
-    //         None
-    //     }
-    // }
+    pub fn get_master<S>(&self) -> Id
+    where
+        S: PuppetState,
+        PuppetBox<S>: Puppet,
+    {
+        let id = Pid::new::<PuppetBox<S>>();
+        self.puppet_to_master
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&id)
+            .cloned()
+            .unwrap()
+    }
+
+    pub fn set_master<M, P>(&self)
+    where
+        M: Master,
+        P: Puppet,
+    {
+        let master = Id::new::<M>();
+        let puppet = Pid::new::<P>();
+        self.master_to_puppets
+            .write()
+            .expect("Failed to acquire write lock")
+            .entry(master)
+            .or_default()
+            .insert(puppet);
+        self.puppet_to_master
+            .write()
+            .expect("Failed to acquire write lock")
+            .insert(puppet, master);
+    }
+
+    pub fn detach_puppet<P>(&self)
+    where
+        P: Puppet,
+    {
+        let master = self.get_master::<P>();
+        let puppet = Pid::new::<P>();
+        self.master_to_puppets
+            .write()
+            .expect("Failed to acquire write lock")
+            .entry(master)
+            .or_default()
+            .remove(&puppet);
+        self.puppet_to_master
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&puppet);
+    }
+
+    pub fn change_master<M, P>(&self)
+    where
+        M: Master,
+        P: Puppet,
+    {
+        self.detach_puppet::<P>();
+        self.set_master::<M, P>();
+    }
+
+    pub fn remove_puppet<P>(&self)
+    where
+        P: Puppet,
+    {
+        let master = self.get_master::<P>();
+        let puppet = Pid::new::<P>();
+        self.puppet_statuses
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&puppet);
+        self.puppet_addresses
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&puppet);
+        self.master_to_puppets
+            .write()
+            .expect("Failed to acquire write lock")
+            .entry(master)
+            .or_default()
+            .shift_remove(&puppet);
+        self.puppet_to_master
+            .write()
+            .expect("Failed to acquire write lock")
+            .remove(&puppet);
+    }
+
+    pub fn has_puppet<M, P>(&self) -> Option<bool>
+    where
+        M: Master,
+        P: Puppet,
+    {
+        let master = Id::new::<M>();
+        let puppet = Pid::new::<P>();
+        self.master_to_puppets
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&master)
+            .map(|puppets| puppets.contains(&puppet))
+    }
+
+    pub fn get_puppets<M>(&self) -> IndexSet<Pid>
+    where
+        M: Master,
+    {
+        let master = Id::new::<M>();
+        self.master_to_puppets
+            .read()
+            .expect("Failed to acquire read lock")
+            .get(&master)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    pub fn release_puppet<P>(&self)
+    where
+        P: Puppet,
+    {
+        self.change_master::<Self, P>();
+    }
+
+    pub fn release_all_puppets<M>(&self)
+    where
+        M: Master,
+    {
+        let puppets = self.get_puppets::<M>();
+        for puppet in puppets {
+            puppet.release(self);
+        }
+    }
 }
 
 /// LIFECYCLE
 /// START
 
 impl Puppeter {
-    // pub async fn start_puppet<M, P>(&self) -> Result<(), StartPuppetError<M, P>>
-    // where
-    //     M: Master,
-    //     P: Puppet,
-    // {
-    //     match self.get_address::<M, P>() {
-    //         Err(error) => Err(error.with_message("Can't start puppet from another
-    // master"))?,         Ok(None) => Err(PuppetDoesNotExist::new().into()),
-    //         Ok(Some(command_address)) => {
-    //             let status = self.get_status::<P>().unwrap();
-    //             match status {
-    //                 LifecycleStatus::Active
-    //                 | LifecycleStatus::Activating
-    //                 | LifecycleStatus::Restarting => Ok(()),
-    //                 _ =>
-    // Ok(command_address.send_command(ServiceCommand::Stop).await?),
-    //             }
-    //         }
-    //     }
-    // }
+    pub async fn start_puppet<M, P>(&self) -> Result<(), StartPuppetError<M, P>>
+    where
+        M: Master,
+        P: Puppet,
+    {
+        match self.has_puppet::<M, P>() {
+            None => Err(PuppetDoesNotExist::<P>::new().into()),
+            Some(false) => {
+                Err(PermissionDenied::<M, P>::new()
+                    .with_message("Cannot start another master puppet")
+                    .into())
+            }
+            Some(true) => {
+                match self.get_status::<P>().unwrap() {
+                    LifecycleStatus::Active
+                    | LifecycleStatus::Activating
+                    | LifecycleStatus::Restarting => Ok(()),
+                    _ => {
+                        let command_address = self.get_address::<P>()?;
+                        Ok(command_address.send_command(ServiceCommand::Start).await?)
+                    }
+                }
+            }
+        }
+        // match (has_puppet, address) {
+        //     (None, _)
+        //     (Some(false), _) => Err(PermissionDenied::<M, P>::new())?,
+        //     // Err(error) => Err(error.with_message("Can't start puppet from
+        // another master"))?,     // Ok(None) =>
+        // Err(PuppetDoesNotExist::new().into()),     //
+        // Ok(Some(command_address)) => {     //     let status =
+        // self.get_status::<P>().unwrap();     //     match status {
+        //     //         LifecycleStatus::Active
+        //     //         | LifecycleStatus::Activating
+        //     //         | LifecycleStatus::Restarting => Ok(()),
+        //     //         _ =>
+        // Ok(command_address.send_command(ServiceCommand::Stop).await?),
+        //     //     }
+        //     // }
+        // }
+    }
 
     // TODO:
 
-    // pub async fn start_puppets<M, P>(&self) -> Result<(), StartPuppetError<M, P>>
-    // where
-    //     M: Master,
-    //     P: Master,
-    // {
-    //     let master = Id::new::<M>();
-    //     let puppet = Id::new::<P>();
-    //     let puppets = self.get_puppets_by_id(puppet);
-    //     for id in puppets {
-    //         self.start_puppet_by_id(master, id).await?;
-    //     }
-    //     Ok(())
-    // }
+    pub async fn start_puppets<M, P>(&self) -> Result<(), StartPuppetError<M, P>>
+    where
+        M: Master,
+        P: Master,
+    {
+        let master = Pid::new::<M>();
+        let puppet = Pid::new::<P>();
+        let puppets = self.get_puppets_by_id(puppet);
+        for id in puppets {
+            self.start_puppet_by_id(master, id).await?;
+        }
+        Ok(())
+    }
     //
     //
     // pub async fn start_tree<M, P>(&self) -> Result<(), StartPuppetError>
@@ -672,17 +684,18 @@ impl Puppeter {
     // // }
 }
 
-pub(crate) async fn run_puppet_loop<P>(
-    mut puppet: P,
-    mut handle: PuppetHandler<P>,
-) -> Result<(), PuppeterSendCommandError<Puppeter, P>>
+pub(crate) async fn run_puppet_loop<S>(
+    mut puppet: PuppetBox<S>,
+    mut handle: PuppetHandler<PuppetBox<S>>,
+) -> Result<(), PuppetError<PuppetBox<S>>>
 where
-    P: Puppet,
+    S: PuppetState + Clone,
+    PuppetBox<S>: Puppet,
 {
-    puppet._start().await?;
+    puppet.box_start().await?;
 
     loop {
-        let Some(status) = PUPPETER.get().unwrap().get_status::<P>() else {
+        let Some(status) = puppet.get_status::<PuppetBox<S>>() else {
             break;
         };
         if status.should_wait_for_activation() {
@@ -699,6 +712,7 @@ where
                 if status.should_handle_message() {
                     envelope.handle_message(&mut puppet).await;
                 } else if status.should_drop_message() {
+
                     envelope.reply_error(PuppetCannotHandleMessage::new(status).into()).await;
                 }
             }
@@ -714,7 +728,7 @@ fn create_puppeter_entities<P>(minion: &PuppetStruct<P>) -> (PuppetHandler<P>, P
 where
     P: Puppet,
 {
-    let id = Id::new::<P>();
+    let id = Pid::new::<P>();
     let (tx, rx) = mpsc::channel::<Box<dyn Envelope<P>>>(minion.buffer_size);
     let (command_tx, command_rx) = mpsc::channel::<ServicePacket<P>>(minion.commands_buffer_size);
 

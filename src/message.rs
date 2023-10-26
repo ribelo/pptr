@@ -8,7 +8,6 @@ use crate::{
     executor::Executor,
     master::puppeter,
     puppet::{self, Handler, Puppet},
-    Id,
 };
 use async_trait::async_trait;
 #[cfg(feature = "rayon")]

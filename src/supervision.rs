@@ -1,6 +1,6 @@
 use std::any::TypeId;
 
-use crate::{master::Puppeter, Id};
+use crate::master::Puppeter;
 
 pub struct OneToOne;
 pub struct OneForAll;
@@ -36,8 +36,8 @@ pub struct RestForOne;
 //     ) {
 //         async fn restart_all_children_recursively(actor_id: Id, puppeter:
 // &Puppeter, master: Id) {             if let Some(service_address) =
-// puppeter.get_command_address_by_id(&actor_id) {                 
-// service_address                     
+// puppeter.get_command_address_by_id(&actor_id) {
+// service_address
 // .send_command(crate::prelude::ServiceCommand::RequestRestart { sender: master
 // })                     .await
 //                     .unwrap();
@@ -68,8 +68,8 @@ pub struct RestForOne;
 //             if restart_next {
 //                 if let Some(service_address) =
 // puppeter.get_command_address_by_id(&id) {                     service_address
-//                         
-// .send_command(crate::prelude::ServiceCommand::RequestRestart {               
+//
+// .send_command(crate::prelude::ServiceCommand::RequestRestart {
 // sender: master,                         })
 //                         .await
 //                         .unwrap();
@@ -80,8 +80,8 @@ pub struct RestForOne;
 //                 restart_next = true;
 //                 if let Some(service_address) =
 // puppeter.get_command_address_by_id(&id) {                     service_address
-//                         
-// .send_command(crate::prelude::ServiceCommand::RequestRestart {               
+//
+// .send_command(crate::prelude::ServiceCommand::RequestRestart {
 // sender: master,                         })
 //                         .await
 //                         .unwrap();

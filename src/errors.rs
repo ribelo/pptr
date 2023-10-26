@@ -6,10 +6,10 @@ use std::{
 use thiserror::Error;
 
 use crate::{
+    id::Pid,
     master::{puppeter, Master, Puppeter},
     prelude::Puppet,
     puppet::LifecycleStatus,
-    PuppetIdentifier,
 };
 
 pub trait ReportFailure<P>
@@ -361,9 +361,9 @@ where
 #[derive(Debug, Error)]
 pub enum IdentificationError {
     #[error("Puppet already exists: {0}")]
-    PuppetAlreadyExists(PuppetIdentifier),
+    PuppetAlreadyExists(Pid),
     #[error("Puppet does not exist: {0}")]
-    PuppetDoesNotExist(PuppetIdentifier),
+    PuppetDoesNotExist(Pid),
 }
 
 impl<P: Puppet> ReportFailure<P> for IdentificationError {
