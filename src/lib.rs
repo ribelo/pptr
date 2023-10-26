@@ -17,10 +17,12 @@ use thiserror::Error;
 pub mod address;
 pub mod errors;
 pub mod executor;
+pub mod id;
 pub mod master;
 pub mod message;
 pub mod puppet;
 pub mod state;
+pub mod supervision;
 
 #[derive(Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Id {

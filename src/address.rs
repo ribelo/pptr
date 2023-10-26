@@ -14,6 +14,7 @@ where
 {
     pub id: Id,
     pub(crate) tx: Postman<P>,
+    pub(crate) command_tx: ServicePostman<P>,
 }
 
 impl<P: Puppet> Clone for PuppetAddress<P> {
@@ -21,6 +22,7 @@ impl<P: Puppet> Clone for PuppetAddress<P> {
         Self {
             id: self.id,
             tx: self.tx.clone(),
+            command_tx: self.command_tx.clone(),
         }
     }
 }
@@ -66,17 +68,5 @@ impl<P: Puppet> fmt::Display for PuppetAddress<P> {
             self.id.id,
             String::from(self.id)
         )
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CommandAddress {
-    pub id: Id,
-    pub(crate) command_tx: ServicePostman,
-}
-
-impl CommandAddress {
-    pub async fn send_command(&self, command: ServiceCommand) -> Result<(), PostmanError<P>> {
-        self.command_tx.send_and_await_response(command).await
     }
 }

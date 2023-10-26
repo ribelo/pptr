@@ -33,22 +33,22 @@ pub trait Envelope<P: Puppet>: Send {
     async fn reply_error(&mut self, err: PuppetError<P>);
 }
 
-pub struct Packet<P, M>
+pub struct Packet<P, E>
 where
-    P: Handler<M>,
-    M: Message,
+    P: Handler<E>,
+    E: Message,
 {
-    message: Option<M>,
+    message: Option<E>,
     reply_address: Option<oneshot::Sender<Result<P::Response, PuppetError<P>>>>,
     _phantom: PhantomData<P>,
 }
 
-impl<P, M> Packet<P, M>
+impl<P, E> Packet<P, E>
 where
-    P: Handler<M>,
-    M: Message,
+    P: Handler<E>,
+    E: Message,
 {
-    pub fn without_reply(message: M) -> Self {
+    pub fn without_reply(message: E) -> Self {
         Self {
             message: Some(message),
             reply_address: None,
@@ -56,7 +56,7 @@ where
         }
     }
     pub fn with_reply(
-        message: M,
+        message: E,
         reply_address: oneshot::Sender<Result<P::Response, PuppetError<P>>>,
     ) -> Self {
         Self {
@@ -76,7 +76,7 @@ where
     async fn handle_message(&mut self, puppet: &mut P) {
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
-        if let Err(err) = P::Executor::execute_message(puppet, msg, reply_address).await {}
+        P::Executor::execute_message(puppet, msg, reply_address).await
     }
     async fn reply_error(&mut self, err: PuppetError<P>) {
         if let Some(reply_address) = self.reply_address.take() {
@@ -86,16 +86,16 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) struct Postman<A>
+pub(crate) struct Postman<P>
 where
-    A: Puppet,
+    P: Puppet,
 {
-    tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<A>>>,
+    tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>,
 }
 
-impl<A> Clone for Postman<A>
+impl<P> Clone for Postman<P>
 where
-    A: Puppet,
+    P: Puppet,
 {
     fn clone(&self) -> Self {
         Self {
@@ -113,10 +113,10 @@ where
     }
 
     #[inline(always)]
-    pub async fn send<M>(&self, message: M) -> Result<(), PostmanError<P>>
+    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError<P>>
     where
-        P: Handler<M>,
-        M: Message + 'static,
+        P: Handler<E>,
+        E: Message + 'static,
     {
         let packet = Packet::without_reply(message);
         self.tx
@@ -127,15 +127,16 @@ where
     }
 
     #[inline(always)]
-    pub async fn send_and_await_response<M>(
+    pub async fn send_and_await_response<E>(
         &self,
-        message: M,
+        message: E,
     ) -> Result<P::Response, PostmanError<P>>
     where
-        P: Handler<M>,
-        M: Message + 'static,
+        P: Handler<E>,
+        E: Message + 'static,
     {
-        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<P::Response, PuppetError>>();
+        let (res_tx, res_rx) =
+            tokio::sync::oneshot::channel::<Result<P::Response, PuppetError<P>>>();
 
         let packet = Packet::with_reply(message, res_tx);
         self.tx
@@ -150,26 +151,35 @@ where
     }
 }
 
-pub struct ServicePacket {
+pub struct ServicePacket<P>
+where
+    P: Puppet,
+{
     pub(crate) cmd: ServiceCommand,
-    pub(crate) reply_address: oneshot::Sender<Result<(), PuppetError>>,
+    pub(crate) reply_address: oneshot::Sender<Result<(), PuppetError<P>>>,
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ServicePostman {
-    tx: tokio::sync::mpsc::Sender<ServicePacket>,
+pub(crate) struct ServicePostman<P>
+where
+    P: Puppet,
+{
+    tx: tokio::sync::mpsc::Sender<ServicePacket<P>>,
 }
 
-impl ServicePostman {
-    pub fn new(tx: tokio::sync::mpsc::Sender<ServicePacket>) -> Self {
+impl<P> ServicePostman<P>
+where
+    P: Puppet,
+{
+    pub fn new(tx: tokio::sync::mpsc::Sender<ServicePacket<P>>) -> Self {
         Self { tx }
     }
 
     pub async fn send_and_await_response(
         &self,
         command: ServiceCommand,
-    ) -> Result<(), PostmanError> {
-        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<(), PuppetError>>();
+    ) -> Result<(), PostmanError<P>> {
+        let (res_tx, res_rx) = tokio::sync::oneshot::channel::<Result<(), PuppetError<P>>>();
         let packet = ServicePacket {
             cmd: command,
             reply_address: res_tx,
@@ -219,15 +229,18 @@ where
 }
 
 #[derive(Debug)]
-pub(crate) struct ServiceMailbox {
-    rx: tokio::sync::mpsc::Receiver<ServicePacket>,
+pub(crate) struct ServiceMailbox<P: Puppet> {
+    rx: tokio::sync::mpsc::Receiver<ServicePacket<P>>,
 }
 
-impl ServiceMailbox {
-    pub fn new(rx: tokio::sync::mpsc::Receiver<ServicePacket>) -> Self {
+impl<P> ServiceMailbox<P>
+where
+    P: Puppet,
+{
+    pub fn new(rx: tokio::sync::mpsc::Receiver<ServicePacket<P>>) -> Self {
         Self { rx }
     }
-    pub async fn recv(&mut self) -> Option<ServicePacket> {
+    pub async fn recv(&mut self) -> Option<ServicePacket<P>> {
         self.rx.recv().await
     }
 }

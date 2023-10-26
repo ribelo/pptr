@@ -7,7 +7,7 @@ use std::{
 use async_trait::async_trait;
 
 use crate::{
-    address::{CommandAddress, PuppetAddress},
+    address::PuppetAddress,
     errors::{
         PermissionDenied, PuppetError, PuppeterSendCommandError, PuppeterSendMessageError,
         PuppeterSpawnError,
@@ -208,12 +208,14 @@ pub trait Puppet: Master + Send + Sync + Sized + Clone + Default + 'static {
         puppeter().get_address::<P>()
     }
 
-    fn get_command_address<P>(&self) -> Result<Option<CommandAddress>, PermissionDenied<Self, P>>
-    where
-        P: Puppet,
-    {
-        puppeter().get_command_address::<Self, P>()
-    }
+    // TODO:
+
+    // fn get_command_address<P>(&self) -> Result<Option<CommandAddress<P>>,
+    // PermissionDenied<Self, P>> where
+    //     P: Puppet,
+    // {
+    //     puppeter().get_command_address::<Self, P>()
+    // }
 
     async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError<P>>
     where
@@ -274,7 +276,7 @@ pub trait Handler<M: Message>: Puppet {
 pub(crate) struct PuppetHandler<P: Puppet> {
     pub(crate) id: Id,
     pub(crate) rx: Mailbox<P>,
-    pub(crate) command_rx: ServiceMailbox,
+    pub(crate) command_rx: ServiceMailbox<P>,
 }
 
 impl<P: Puppet> fmt::Display for PuppetHandler<P> {
@@ -285,17 +287,6 @@ impl<P: Puppet> fmt::Display for PuppetHandler<P> {
             self.id.id,
             (self.id.get_name)()
         )
-    }
-}
-
-impl<P: Puppet> fmt::Debug for PuppetHandler<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("PuppetHandler")
-            .field("id", &self.id)
-            .field("name", &(&self.id.get_name)())
-            .field("rx", &self.rx) // Dodaj, jeżeli Mailbox implementuje Debug
-            .field("command_rx", &self.command_rx) // Dodaj, jeżeli ServiceMailbox implementuje Debug
-            .finish()
     }
 }
 

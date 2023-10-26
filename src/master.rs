@@ -10,7 +10,7 @@ use indexmap::IndexSet;
 use tokio::sync::mpsc;
 
 use crate::{
-    address::{CommandAddress, PuppetAddress},
+    address::PuppetAddress,
     errors::{
         KillPuppetError, PermissionDenied, PuppetAlreadyExist, PuppetCannotHandleMessage,
         PuppetDoesNotExist, PuppetError, PuppeterSendCommandError, PuppeterSendMessageError,
@@ -30,7 +30,6 @@ pub static PUPPETER: OnceLock<Puppeter> = OnceLock::new();
 pub struct Puppeter {
     pub(crate) puppet_statuses: Arc<RwLock<HashMap<Id, LifecycleStatus>>>,
     pub(crate) puppet_addresses: Arc<RwLock<HashMap<Id, BoxedAny>>>,
-    pub(crate) command_addresses: Arc<RwLock<HashMap<Id, CommandAddress>>>,
     pub(crate) master_to_puppets: Arc<RwLock<HashMap<Id, IndexSet<Id>>>>,
     pub(crate) puppet_to_master: Arc<RwLock<HashMap<Id, Id>>>,
     pub(crate) state: Arc<RwLock<HashMap<Id, BoxedAny>>>,
@@ -53,58 +52,11 @@ impl Puppeter {
 // STATUS
 
 impl Puppeter {
-    /// Returns the lifecycle status of a specific type of puppet.
-    ///
-    /// This function uses a type ID to look up the lifecycle status of a puppet
-    /// within the framework. If a puppet of the specified type exists, its
-    /// `LifecycleStatus` is returned. If no such puppet exists, then `None`
-    /// is returned.
-    ///
-    /// Internally, this function calls the `get_status_by_id` method with the
-    /// type ID of `P`.
-    ///
-    /// # Type Parameters
-    ///
-    /// - `P`: The type of the puppet to get the lifecycle status of.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let status = puppet.get_status::<MyPuppet>();
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it cannot get the lifecycle status of the
-    /// puppet, which can occur if the framework fails to acquire a read
-    /// lock on the puppet status.
     pub(crate) fn get_status<P>(&self) -> Option<LifecycleStatus>
     where
         P: Puppet,
     {
         let id = Id::new::<P>();
-        self.get_status_by_id(id)
-    }
-
-    /// Returns the lifecycle status of a puppet associated with the specified
-    /// ID.
-    ///
-    /// This function obtains a read lock on the puppet_statuses hashmap,
-    /// searches for the ID, then returns a clone of the found lifecycle
-    /// status. If the given id does not exist in the hashmap, it returns
-    /// None.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let status = puppet.get_status_by_id(Id);
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it fails to acquire the read lock on the
-    /// puppet_statuses hashmap.
-    pub fn get_status_by_id(&self, id: Id) -> Option<LifecycleStatus> {
         self.puppet_statuses
             .read()
             .expect("Failed to acquire read lock")
@@ -117,32 +69,6 @@ impl Puppeter {
         P: Puppet,
     {
         let id = Id::new::<P>();
-        self.set_status_by_id(id, status)
-    }
-
-    /// Sets the lifecycle status of an actor by its ID.
-    ///
-    /// This function acquires a write lock on the actor statuses and updates
-    /// the status of the given actor. If the actor doesn't exist, an `None`
-    /// is returned.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// let actor_id: Id = ...; // an existing actor ID.
-    /// let status = LifecycleStatus::Active; // an instance of `LifecycleStatus` enum.
-    /// puppeteer.set_status_by_id(actor_id, status);
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// This function will panic if it fails to acquire the write lock on the
-    /// `puppet_statuses` map.
-    pub(crate) fn set_status_by_id(
-        &self,
-        id: Id,
-        status: LifecycleStatus,
-    ) -> Option<LifecycleStatus> {
         self.puppet_statuses
             .write()
             .expect("Failed to acquire write lock")
@@ -174,14 +100,11 @@ impl Puppeter {
         M: Master,
     {
         let id = Id::new::<M>();
-        self.is_puppet_exists_by_id(id) || id == Id::new::<Self>()
-    }
-
-    pub fn is_puppet_exists_by_id(&self, id: Id) -> bool {
         self.puppet_addresses
             .read()
             .expect("Failed to acquire read lock")
             .contains_key(&id)
+            || id == Id::new::<Self>()
     }
 }
 
@@ -211,54 +134,6 @@ impl Puppeter {
             .expect("Failed to acquire write lock")
             .insert(id, Box::new(address));
     }
-
-    pub fn get_command_address<M, P>(
-        &self,
-    ) -> Result<Option<CommandAddress>, PermissionDenied<M, P>>
-    where
-        M: Master,
-        P: Puppet,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.get_command_address_by_id(master, puppet)
-    }
-
-    pub fn get_command_address_by_id(
-        &self,
-        master: Id,
-        puppet: Id,
-    ) -> Result<Option<CommandAddress>, PermissionDenied<M, P>> {
-        match self.has_permission_by_id(master, puppet) {
-            Some(true) => {
-                Ok(self
-                    .command_addresses
-                    .read()
-                    .expect("Failed to acquire read lock")
-                    .get(&puppet)
-                    .cloned())
-            }
-            Some(false) => {
-                Err(PermissionDenied {
-                    master: master.into(),
-                    puppet: puppet.into(),
-                    message: "Can't get puppet command address from another master".to_string(),
-                })
-            }
-            None => Ok(None),
-        }
-    }
-
-    pub fn set_command_address<P>(&self, command_address: CommandAddress)
-    where
-        P: Puppet,
-    {
-        let id = Id::new::<P>();
-        self.command_addresses
-            .write()
-            .expect("Failed to acquire write lock")
-            .insert(id, command_address);
-    }
 }
 
 /// RELATIONS
@@ -269,10 +144,6 @@ impl Puppeter {
         P: Puppet,
     {
         let id = Id::new::<P>();
-        self.get_master_by_id(id)
-    }
-
-    pub fn get_master_by_id(&self, id: Id) -> Id {
         self.puppet_to_master
             .read()
             .expect("Failed to acquire read lock")
@@ -288,10 +159,6 @@ impl Puppeter {
     {
         let master = Id::new::<M>();
         let puppet = Id::new::<P>();
-        self.set_master_by_id(master, puppet);
-    }
-
-    pub fn set_master_by_id(&self, master: Id, puppet: Id) {
         self.master_to_puppets
             .write()
             .expect("Failed to acquire write lock")
@@ -311,19 +178,11 @@ impl Puppeter {
     {
         let master = Id::new::<M>();
         let puppet = Id::new::<P>();
-        self.remove_puppet_by_id(master, puppet);
-    }
-
-    pub fn remove_puppet_by_id(&self, master: Id, puppet: Id) {
         self.puppet_statuses
             .write()
             .expect("Failed to acquire write lock")
             .remove(&puppet);
         self.puppet_addresses
-            .write()
-            .expect("Failed to acquire write lock")
-            .remove(&puppet);
-        self.command_addresses
             .write()
             .expect("Failed to acquire write lock")
             .remove(&puppet);
@@ -346,10 +205,6 @@ impl Puppeter {
     {
         let master = Id::new::<M>();
         let puppet = Id::new::<P>();
-        self.has_puppet_by_id(master, puppet)
-    }
-
-    pub fn has_puppet_by_id(&self, master: Id, puppet: Id) -> Option<bool> {
         self.master_to_puppets
             .read()
             .expect("Failed to acquire read lock")
@@ -362,10 +217,6 @@ impl Puppeter {
         M: Master,
     {
         let id = Id::new::<M>();
-        self.get_puppets_by_id(id)
-    }
-
-    pub fn get_puppets_by_id(&self, id: Id) -> IndexSet<Id> {
         self.master_to_puppets
             .read()
             .expect("Failed to acquire read lock")
@@ -383,25 +234,15 @@ impl Puppeter {
         self.set_master::<Self, P>();
     }
 
-    pub fn release_puppet_by_id(&self, master: Id, puppet: Id) {
-        self.remove_puppet_by_id(master, puppet);
-        self.set_master_by_id(Id::new::<Self>(), puppet);
-    }
+    // TODO:
 
-    pub fn release_all_puppets<M>(&self)
-    where
-        M: Master,
-    {
-        let master = Id::new::<M>();
-        self.release_all_puppets_by_id(master);
-    }
-
-    pub fn release_all_puppets_by_id(&self, master: Id) {
-        let puppets = self.get_puppets_by_id(master);
-        for puppet in puppets {
-            self.release_puppet_by_id(master, puppet);
-        }
-    }
+    // pub fn release_all_puppets<M>(&self)
+    // where
+    //     M: Master,
+    // {
+    //     let master = Id::new::<M>();
+    //     self.release_all_puppets_by_id(master);
+    // }
 
     pub fn has_permission<M, P>(&self) -> Option<bool>
     where
@@ -410,11 +251,7 @@ impl Puppeter {
     {
         let master = Id::new::<M>();
         let puppet = Id::new::<P>();
-        self.has_permission_by_id(master, puppet)
-    }
-
-    pub fn has_permission_by_id(&self, master: Id, puppet: Id) -> Option<bool> {
-        if let Some(has) = self.has_puppet_by_id(master, puppet) {
+        if let Some(has) = self.has_puppet::<M, P>() {
             let puppeter_id = Id::new::<Self>();
             Some(has || master == puppeter_id)
         } else {
@@ -427,27 +264,16 @@ impl Puppeter {
 /// START
 
 impl Puppeter {
-    pub async fn start_puppet<M, P>(&self) -> Result<(), StartPuppetError>
+    pub async fn start_puppet<M, P>(&self) -> Result<(), StartPuppetError<M, P>>
     where
         M: Master,
         P: Puppet,
     {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.start_puppet_by_id(master, puppet).await
-    }
-
-    pub async fn start_puppet_by_id(&self, master: Id, puppet: Id) -> Result<(), StartPuppetError> {
-        match self.get_command_address_by_id(master, puppet) {
+        match self.get_address::<M, P>() {
             Err(error) => Err(error.with_message("Can't start puppet from another master"))?,
-            Ok(None) => {
-                Err(PuppetDoesNotExist {
-                    name: puppet.into(),
-                }
-                .into())
-            }
+            Ok(None) => Err(PuppetDoesNotExist::new().into()),
             Ok(Some(command_address)) => {
-                let status = self.get_status_by_id(puppet).unwrap();
+                let status = self.get_status::<P>().unwrap();
                 match status {
                     LifecycleStatus::Active
                     | LifecycleStatus::Activating
@@ -458,81 +284,64 @@ impl Puppeter {
         }
     }
 
-    pub async fn start_puppets<M, P>(&self) -> Result<(), StartPuppetError>
-    where
-        M: Master,
-        P: Master,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.start_puppets_by_id(master, puppet).await?;
-        Ok(())
-    }
+    // TODO:
 
-    pub async fn start_puppets_by_id(
-        &self,
-        master: Id,
-        puppet: Id,
-    ) -> Result<(), StartPuppetError> {
-        let puppets = self.get_puppets_by_id(puppet);
-        for id in puppets {
-            self.start_puppet_by_id(master, id).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn start_tree<M, P>(&self) -> Result<(), StartPuppetError>
-    where
-        M: Master,
-        P: Master,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.start_tree_by_id(master, puppet).await?;
-        Ok(())
-    }
-
-    pub async fn start_tree_by_id(&self, master: Id, puppet: Id) -> Result<(), StartPuppetError> {
-        let mut queue = VecDeque::new();
-        queue.push_back(puppet);
-
-        while let Some(current_id) = queue.pop_front() {
-            self.start_puppet_by_id(master, current_id).await?;
-
-            let puppets_ids = self.get_puppets_by_id(current_id);
-            for id in puppets_ids {
-                queue.push_back(id);
-            }
-        }
-
-        Ok(())
-    }
+    // pub async fn start_puppets<M, P>(&self) -> Result<(), StartPuppetError<M, P>>
+    // where
+    //     M: Master,
+    //     P: Master,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     let puppets = self.get_puppets_by_id(puppet);
+    //     for id in puppets {
+    //         self.start_puppet_by_id(master, id).await?;
+    //     }
+    //     Ok(())
+    // }
+    //
+    //
+    // pub async fn start_tree<M, P>(&self) -> Result<(), StartPuppetError>
+    // where
+    //     M: Master,
+    //     P: Master,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     self.start_tree_by_id(master, puppet).await?;
+    //     Ok(())
+    // }
+    //
+    // pub async fn start_tree_by_id(&self, master: Id, puppet: Id) -> Result<(),
+    // StartPuppetError> {     let mut queue = VecDeque::new();
+    //     queue.push_back(puppet);
+    //
+    //     while let Some(current_id) = queue.pop_front() {
+    //         self.start_puppet_by_id(master, current_id).await?;
+    //
+    //         let puppets_ids = self.get_puppets_by_id(current_id);
+    //         for id in puppets_ids {
+    //             queue.push_back(id);
+    //         }
+    //     }
+    //
+    //     Ok(())
+    // }
 }
 
 /// STOP
 
 impl Puppeter {
-    pub async fn stop_puppet<M, P>(&self) -> Result<(), StopPuppetError>
+    pub async fn stop_puppet<M, P>(&self) -> Result<(), StopPuppetError<M, P>>
     where
         M: Master,
         P: Puppet,
     {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.stop_puppet_by_id(master, puppet).await
-    }
-
-    pub async fn stop_puppet_by_id(&self, master: Id, puppet: Id) -> Result<(), StopPuppetError> {
-        match self.get_command_address_by_id(master, puppet) {
+        match self.get_command_address::<M, P>() {
             Err(e) => Err(e.with_message("Can't stop puppet from another master"))?,
-            Ok(None) => {
-                Err(PuppetDoesNotExist {
-                    name: puppet.into(),
-                }
-                .into())
-            }
+            Ok(None) => Err(PuppetDoesNotExist::new::<P>()),
             Ok(Some(command_address)) => {
-                let status = self.get_status_by_id(puppet).unwrap();
+                let status = self.get_status::<P>().unwrap();
                 match status {
                     LifecycleStatus::Inactive | LifecycleStatus::Deactivating => Ok(()),
                     _ => Ok(command_address.send_command(ServiceCommand::Stop).await?),
@@ -541,86 +350,65 @@ impl Puppeter {
         }
     }
 
-    pub async fn stop_puppets<M, P>(&self) -> Result<(), StopPuppetError>
-    where
-        M: Master,
-        P: Master,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.stop_puppets_by_id(master, puppet).await?;
-        Ok(())
-    }
-
-    pub async fn stop_puppets_by_id(&self, master: Id, puppet: Id) -> Result<(), StopPuppetError> {
-        let puppets = self.get_puppets_by_id(puppet);
-        for id in puppets.iter().rev() {
-            self.stop_puppet_by_id(master, *id).await?
-        }
-        Ok(())
-    }
-
-    pub async fn stop_tree<M, P>(&self) -> Result<(), StopPuppetError>
-    where
-        M: Master,
-        P: Puppet,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.stop_tree_by_id(master, puppet).await?;
-        Ok(())
-    }
-
-    pub async fn stop_tree_by_id(&self, master: Id, puppet: Id) -> Result<(), StopPuppetError> {
-        let mut stack = Vec::new();
-        let mut queue = Vec::new();
-
-        stack.push(puppet);
-
-        while let Some(current_id) = stack.pop() {
-            queue.push(current_id);
-
-            for id in self.get_puppets_by_id(current_id) {
-                stack.push(id);
-            }
-        }
-
-        for id in queue.iter().rev() {
-            self.stop_puppet_by_id(master, *id).await?;
-        }
-
-        Ok(())
-    }
+    // pub async fn stop_puppets<M, P>(&self) -> Result<(), StopPuppetError<M, P>>
+    // where
+    //     M: Master,
+    //     P: Master,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     for id in puppets.iter().rev() {
+    //         self.stop_puppet_by_id(master, *id).await?
+    //     }
+    //     Ok(())
+    // }
+    //
+    // pub async fn stop_tree<M, P>(&self) -> Result<(), StopPuppetError>
+    // where
+    //     M: Master,
+    //     P: Puppet,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     self.stop_tree_by_id(master, puppet).await?;
+    //     Ok(())
+    // }
+    //
+    // pub async fn stop_tree_by_id(&self, master: Id, puppet: Id) -> Result<(),
+    // StopPuppetError> {     let mut stack = Vec::new();
+    //     let mut queue = Vec::new();
+    //
+    //     stack.push(puppet);
+    //
+    //     while let Some(current_id) = stack.pop() {
+    //         queue.push(current_id);
+    //
+    //         for id in self.get_puppets_by_id(current_id) {
+    //             stack.push(id);
+    //         }
+    //     }
+    //
+    //     for id in queue.iter().rev() {
+    //         self.stop_puppet_by_id(master, *id).await?;
+    //     }
+    //
+    //     Ok(())
+    // }
 }
 
 /// RESTART
 
 impl Puppeter {
-    pub async fn restart_puppet<M, P>(&self) -> Result<(), ResetPuppetError>
+    pub async fn restart_puppet<M, P>(&self) -> Result<(), ResetPuppetError<M, P>>
     where
         M: Master,
         P: Puppet,
     {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.restart_puppet_by_id(master, puppet).await
-    }
-
-    pub async fn restart_puppet_by_id(
-        &self,
-        master: Id,
-        puppet: Id,
-    ) -> Result<(), ResetPuppetError> {
-        match self.get_command_address_by_id(master, puppet) {
+        match self.get_command_address::<M, P>() {
             Err(e) => Err(e.with_message("Can't restart puppet from another master"))?,
-            Ok(None) => {
-                Err(PuppetDoesNotExist {
-                    name: puppet.into(),
-                }
-                .into())
-            }
+            Ok(None) => Err(PuppetDoesNotExist::new::<P>()),
             Ok(Some(command_address)) => {
-                let status = self.get_status_by_id(puppet).unwrap();
+                let status = self.get_status::<P>().unwrap();
                 match status {
                     LifecycleStatus::Restarting => Ok(()),
                     _ => {
@@ -633,91 +421,70 @@ impl Puppeter {
         }
     }
 
-    pub async fn restart_puppets<M, P>(&self) -> Result<(), ResetPuppetError>
-    where
-        M: Master,
-        P: Master,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.restart_puppets_by_id(master, puppet).await?;
-        Ok(())
-    }
+    // pub async fn restart_puppets<M, P>(&self) -> Result<(), ResetPuppetError<M,
+    // P>> where
+    //     M: Master,
+    //     P: Master,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     for id in puppets.iter().rev() {
+    //         self.restart_puppet_by_id(master, *id).await?;
+    //     }
+    //     Ok(())
+    // }
 
-    pub async fn restart_puppets_by_id(
-        &self,
-        master: Id,
-        puppet: Id,
-    ) -> Result<(), ResetPuppetError> {
-        let puppets = self.get_puppets_by_id(puppet);
-        for id in puppets.iter().rev() {
-            self.restart_puppet_by_id(master, *id).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn restart_tree<M, P>(&self) -> Result<(), ResetPuppetError>
-    where
-        M: Master,
-        P: Puppet,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.restart_tree_by_id(master, puppet).await?;
-        Ok(())
-    }
-
-    pub async fn restart_tree_by_id(&self, master: Id, puppet: Id) -> Result<(), ResetPuppetError> {
-        let mut stack = Vec::new();
-        let mut queue = Vec::new();
-
-        stack.push(puppet);
-
-        while let Some(current_id) = stack.pop() {
-            queue.push(current_id);
-
-            for id in self.get_puppets_by_id(current_id) {
-                stack.push(id);
-            }
-        }
-
-        for id in queue.iter().rev() {
-            self.stop_puppet_by_id(master, *id).await?;
-        }
-
-        Ok(())
-    }
+    // pub async fn restart_tree<M, P>(&self) -> Result<(), ResetPuppetError>
+    // where
+    //     M: Master,
+    //     P: Puppet,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     self.restart_tree_by_id(master, puppet).await?;
+    //     Ok(())
+    // }
+    //
+    // pub async fn restart_tree_by_id(&self, master: Id, puppet: Id) -> Result<(),
+    // ResetPuppetError> {     let mut stack = Vec::new();
+    //     let mut queue = Vec::new();
+    //
+    //     stack.push(puppet);
+    //
+    //     while let Some(current_id) = stack.pop() {
+    //         queue.push(current_id);
+    //
+    //         for id in self.get_puppets_by_id(current_id) {
+    //             stack.push(id);
+    //         }
+    //     }
+    //
+    //     for id in queue.iter().rev() {
+    //         self.stop_puppet_by_id(master, *id).await?;
+    //     }
+    //
+    //     Ok(())
+    // }
 }
 //
 // /// KILL
 //
 impl Puppeter {
-    pub async fn kill_puppet<M, P>(&self) -> Result<(), KillPuppetError>
+    pub async fn kill_puppet<M, P>(&self) -> Result<(), KillPuppetError<M, P>>
     where
         M: Master,
         P: Puppet,
     {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.kill_puppet_by_id(master, puppet).await
-    }
-
-    pub async fn kill_puppet_by_id(&self, master: Id, puppet: Id) -> Result<(), KillPuppetError> {
-        match self.get_command_address_by_id(master, puppet) {
+        match self.get_command_address::<M, P>() {
             Err(e) => Err(e.with_message("Can't kill puppet from another master"))?,
-            Ok(None) => {
-                Err(PuppetDoesNotExist {
-                    name: puppet.into(),
-                }
-                .into())
-            }
+            Ok(None) => Err(PuppetDoesNotExist::new::<P>()),
             Ok(Some(command_address)) => {
-                let status = self.get_status_by_id(puppet).unwrap();
+                let status = self.get_status::<P>().unwrap();
                 match status {
                     LifecycleStatus::Deactivating => Ok(()),
                     _ => {
                         command_address.send_command(ServiceCommand::Kill).await?;
-                        self.remove_puppet_by_id(master, puppet);
+                        self.remove_puppet::<M, P>();
                         Ok(())
                     }
                 }
@@ -725,71 +492,63 @@ impl Puppeter {
         }
     }
 
-    pub async fn kill_puppets<M, P>(&self) -> Result<(), KillPuppetError>
-    where
-        M: Master,
-        P: Master,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.kill_puppets_by_id(master, puppet).await?;
-        Ok(())
-    }
+    // pub async fn kill_puppets<M, P>(&self) -> Result<(), KillPuppetError<M, P>>
+    // where
+    //     M: Master,
+    //     P: Master,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     for id in puppets.iter().rev() {
+    //         self.kill_puppet_by_id(master, *id).await?;
+    //     }
+    //     Ok(())
+    // }
 
-    pub async fn kill_puppets_by_id(&self, master: Id, puppet: Id) -> Result<(), KillPuppetError> {
-        let puppets = self.get_puppets_by_id(puppet);
-        for id in puppets.iter().rev() {
-            self.kill_puppet_by_id(master, *id).await?;
-        }
-        Ok(())
-    }
-
-    pub async fn kill_tree<M, P>(&self) -> Result<(), KillPuppetError>
-    where
-        M: Master,
-        P: Puppet,
-    {
-        let master = Id::new::<M>();
-        let puppet = Id::new::<P>();
-        self.kill_tree_by_id(master, puppet).await?;
-        Ok(())
-    }
-
-    pub async fn kill_tree_by_id(&self, master: Id, puppet: Id) -> Result<(), KillPuppetError> {
-        let mut stack = Vec::new();
-        let mut queue = Vec::new();
-
-        stack.push(puppet);
-
-        while let Some(current_id) = stack.pop() {
-            queue.push(current_id);
-
-            for id in self.get_puppets_by_id(current_id) {
-                stack.push(id);
-            }
-        }
-
-        for id in queue.iter().rev() {
-            self.kill_puppet_by_id(master, *id).await?;
-        }
-
-        Ok(())
-    }
+    // pub async fn kill_tree<M, P>(&self) -> Result<(), KillPuppetError>
+    // where
+    //     M: Master,
+    //     P: Puppet,
+    // {
+    //     let master = Id::new::<M>();
+    //     let puppet = Id::new::<P>();
+    //     self.kill_tree_by_id(master, puppet).await?;
+    //     Ok(())
+    // }
+    //
+    // pub async fn kill_tree_by_id(&self, master: Id, puppet: Id) -> Result<(),
+    // KillPuppetError> {     let mut stack = Vec::new();
+    //     let mut queue = Vec::new();
+    //
+    //     stack.push(puppet);
+    //
+    //     while let Some(current_id) = stack.pop() {
+    //         queue.push(current_id);
+    //
+    //         for id in self.get_puppets_by_id(current_id) {
+    //             stack.push(id);
+    //         }
+    //     }
+    //
+    //     for id in queue.iter().rev() {
+    //         self.kill_puppet_by_id(master, *id).await?;
+    //     }
+    //
+    //     Ok(())
+    // }
 }
 
 impl Puppeter {
     pub(crate) fn spawn<M, P>(
         &self,
         puppet: impl Into<PuppetStruct<P>>,
-    ) -> Result<PuppetAddress<P>, PuppeterSpawnError>
+    ) -> Result<PuppetAddress<P>, PuppeterSpawnError<P>>
     where
         M: Master,
         P: Puppet,
     {
         if self.is_puppet_exists::<P>() {
-            Err(PuppetAlreadyExist {
-                name: Id::new::<P>().into(),
-            })?
+            Err(PuppetAlreadyExist::new::<P>())?
         } else {
             let puppet_struct = puppet.into();
             let (handle, puppet_address, command_address) =
@@ -804,7 +563,7 @@ impl Puppeter {
         }
     }
 
-    pub async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError>
+    pub async fn send<P, E>(&self, message: E) -> Result<(), PuppeterSendMessageError<P>>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -822,21 +581,14 @@ impl Puppeter {
                         .await
                         .map_err(|err| PuppeterSendMessageError::from((err, String::from(puppet))))
                 }
-                _ => {
-                    Err(PuppetCannotHandleMessage {
-                        name: puppet.into(),
-                        status,
-                    })?
-                }
+                _ => Err(PuppetCannotHandleMessage::new::<P>(status))?,
             }
         } else {
-            Err(PuppeterSendMessageError::PuppetDoesNotExist {
-                name: puppet.into(),
-            })
+            Err(PuppetDoesNotExist::new::<P>())
         }
     }
 
-    pub async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppeterSendMessageError>
+    pub async fn ask<P, E>(&self, message: E) -> Result<P::Response, PuppeterSendMessageError<P>>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -854,12 +606,7 @@ impl Puppeter {
                         .await
                         .map_err(|err| PuppeterSendMessageError::from((err, String::from(puppet))))
                 }
-                _ => {
-                    Err(PuppetCannotHandleMessage {
-                        name: puppet.into(),
-                        status,
-                    })?
-                }
+                _ => Err(PuppetCannotHandleMessage::new::<P>(status))?,
             }
         } else {
             Err(PuppeterSendMessageError::PuppetDoesNotExist {
@@ -872,7 +619,7 @@ impl Puppeter {
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<P::Response, PuppeterSendMessageError>
+    ) -> Result<P::Response, PuppeterSendMessageError<P>>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -888,30 +635,16 @@ impl Puppeter {
     pub async fn send_command<M, P>(
         &self,
         command: ServiceCommand,
-    ) -> Result<(), PuppeterSendCommandError>
+    ) -> Result<(), PuppeterSendCommandError<M, P>>
     where
         M: Master,
         P: Puppet,
     {
         let master = Id::new::<M>();
         let puppet = Id::new::<P>();
-        self.send_command_by_id(master, puppet, command).await
-    }
-
-    pub async fn send_command_by_id(
-        &self,
-        master: Id,
-        puppet: Id,
-        command: ServiceCommand,
-    ) -> Result<(), PuppeterSendCommandError> {
-        match self.get_command_address_by_id(master, puppet) {
-            Err(e) => Err(e.with_message("Can't kill puppet from another master"))?,
-            Ok(None) => {
-                Err(PuppetDoesNotExist {
-                    name: puppet.into(),
-                }
-                .into())
-            }
+        match self.get_command_address::<P>() {
+            Err(e) => Err(e.with_message("Can't send command to another master"))?,
+            Ok(None) => Err(PuppetDoesNotExist::new::<P>().into()),
             Ok(Some(command_address)) => {
                 command_address
                     .command_tx
@@ -922,7 +655,7 @@ impl Puppeter {
         }
     }
 
-    pub async fn report_failure<P>(&self, error: &impl Into<PuppetError>)
+    pub async fn report_failure<P>(&self, error: &impl Into<PuppetError<P>>)
     where
         P: Puppet,
     {
@@ -955,7 +688,7 @@ impl Puppeter {
 pub(crate) async fn run_puppet_loop<P>(
     mut puppet: P,
     mut handle: PuppetHandler<P>,
-) -> Result<(), PuppeterSendCommandError>
+) -> Result<(), PuppeterSendCommandError<Puppeter, P>>
 where
     P: Puppet,
 {
@@ -979,7 +712,7 @@ where
                 if status.should_handle_message() {
                     envelope.handle_message(&mut puppet).await;
                 } else if status.should_drop_message() {
-                    envelope.reply_error(PuppetCannotHandleMessage{name: Id::new::<P>().into(), status}.into()).await;
+                    envelope.reply_error(PuppetCannotHandleMessage::new::<P>(status).into()).await;
                 }
             }
             else => {
@@ -990,31 +723,23 @@ where
     Ok(())
 }
 
-fn create_puppeter_entities<P>(
-    minion: &PuppetStruct<P>,
-) -> (PuppetHandler<P>, PuppetAddress<P>, CommandAddress)
+fn create_puppeter_entities<P>(minion: &PuppetStruct<P>) -> (PuppetHandler<P>, PuppetAddress<P>)
 where
     P: Puppet,
 {
+    let id = Id::new::<P>();
     let (tx, rx) = mpsc::channel::<Box<dyn Envelope<P>>>(minion.buffer_size);
     let (command_tx, command_rx) = mpsc::channel::<ServicePacket>(minion.commands_buffer_size);
 
     let handler = PuppetHandler {
-        id: Id::new::<P>(),
+        id,
         rx: Mailbox::new(rx),
         command_rx: ServiceMailbox::new(command_rx),
     };
     let tx = Postman::new(tx);
     let command_tx = ServicePostman::new(command_tx);
-    let puppet_address = PuppetAddress {
-        id: Id::new::<P>(),
-        tx,
-    };
-    let command_address = CommandAddress {
-        id: Id::new::<P>(),
-        command_tx,
-    };
-    (handler, puppet_address, command_address)
+    let puppet_address = PuppetAddress { id, tx, command_tx };
+    (handler, puppet_address)
 }
 
 #[derive(Debug, Default, Clone)]
@@ -1056,7 +781,10 @@ mod tests {
         impl Handler<SleepMessage> for SleepActor {
             type Response = i32;
             type Executor = executor::SequentialExecutor;
-            async fn handle_message(&mut self, msg: SleepMessage) -> Result<i32, PuppetError> {
+            async fn handle_message(
+                &mut self,
+                msg: SleepMessage,
+            ) -> Result<i32, PuppetError<Self>> {
                 println!("SleepActor Received message: {:?}", msg);
                 // with_state(|i: Option<&i32>| {
                 //     if i.is_some() {
