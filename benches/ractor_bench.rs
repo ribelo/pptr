@@ -49,8 +49,8 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("ractor ask ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let (actor, handle) = std::mem::take(&mut ping_address).unwrap();
-    //             for _ in 0..100_000 {
+    //             let (actor, handle) = std::mem::take(&mut
+    // ping_address).unwrap();             for _ in 0..100_000 {
     //                 actor.send_message(PingMessage(10)).unwrap();
     //             }
     //             handle.await.unwrap();

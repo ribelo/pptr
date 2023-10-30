@@ -1,87 +1,89 @@
 use std::fmt;
 
+use tokio::sync::watch;
+
 use crate::{
     errors::PostmanError,
-    id::Pid,
     message::{Message, Postman, ServiceCommand, ServicePostman},
-    puppet::{Handler, Puppet},
-    puppet_box::{PuppetBox, PuppetState},
+    pid::Pid,
+    puppet::{Handler, Lifecycle, LifecycleStatus, Puppet, PuppetState, ResponseFor},
 };
 
-#[derive(Debug)]
-pub struct PuppetAddress<P>
+#[derive(Debug, Clone)]
+pub struct Address<P>
 where
-    P: Puppet,
+    P: PuppetState,
+    Puppet<P>: Lifecycle,
 {
-    pub id: Pid,
-    pub(crate) tx: Postman<P>,
-    pub(crate) command_tx: ServicePostman<P>,
+    pub pid: Pid,
+    pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
+    pub(crate) message_tx: Postman<P>,
 }
 
-impl<P: Puppet> Clone for PuppetAddress<P> {
-    fn clone(&self) -> Self {
-        Self {
-            id: self.id,
-            tx: self.tx.clone(),
-            command_tx: self.command_tx.clone(),
-        }
-    }
-}
-
-impl<P: Puppet> PuppetAddress<P> {
-    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError<P>>
-    where
-        P: Handler<E>,
-        E: Message + 'static,
-    {
-        self.tx.send(message).await
+impl<P> Address<P>
+where
+    P: PuppetState,
+    Puppet<P>: Lifecycle,
+{
+    pub fn get_status(&self) -> LifecycleStatus {
+        *self.status_rx.borrow()
     }
 
-    pub async fn ask<E>(&self, message: E) -> Result<P::Response, PostmanError<P>>
+    pub fn status_subscribe(&self) -> watch::Receiver<LifecycleStatus> {
+        self.status_rx.clone()
+    }
+
+    pub fn on_status_change<F>(&self, f: F)
     where
-        P: Handler<E>,
+        F: Fn(LifecycleStatus) + Send + 'static,
+    {
+        let mut rx = self.status_subscribe();
+        tokio::spawn(async move {
+            while (rx.changed().await).is_ok() {
+                f(*rx.borrow());
+            }
+        });
+    }
+
+    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
+    where
+        Puppet<P>: Handler<E>,
         E: Message + 'static,
     {
-        self.tx.send_and_await_response(message).await
+        self.message_tx.send::<E>(message).await
+    }
+
+    pub async fn ask<E>(&self, message: E) -> Result<ResponseFor<P, E>, PostmanError>
+    where
+        Puppet<P>: Handler<E>,
+        E: Message + 'static,
+    {
+        self.message_tx
+            .send_and_await_response::<E>(message, None)
+            .await
     }
 
     pub async fn ask_with_timeout<E>(
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<P::Response, PostmanError<P>>
+    ) -> Result<ResponseFor<P, E>, PostmanError>
     where
-        P: Handler<E>,
+        Puppet<P>: Handler<E>,
         E: Message + 'static,
     {
-        tokio::select! {
-            result = self.tx.send_and_await_response(message) => result,
-            _ = tokio::time::sleep(duration) => Err(PostmanError::ResponseTimeout),
-        }
+        self.message_tx
+            .send_and_await_response::<E>(message, Some(duration))
+            .await
     }
 }
 
-impl<P: Puppet> fmt::Display for PuppetAddress<P> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "Address {{ id: {}, name: {} }}",
-            self.id.id,
-            String::from(self.id)
-        )
-    }
-}
-
-impl<S> From<PuppetBox<S>> for PuppetAddress<PuppetBox<S>>
+impl<P> fmt::Display for Address<P>
 where
-    S: PuppetState,
-    PuppetBox<S>: Puppet,
+    P: PuppetState,
+    Puppet<P>: Lifecycle,
 {
-    fn from(puppet_box: PuppetBox<S>) -> Self {
-        PuppetAddress {
-            id: Pid::new::<PuppetBox<S>>(),
-            tx: puppet_box.message_tx.clone(),
-            command_tx: puppet_box.command_tx.clone(),
-        }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Address({})", self.pid)
     }
 }

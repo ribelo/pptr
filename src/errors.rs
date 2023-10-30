@@ -6,101 +6,68 @@ use std::{
 use thiserror::Error;
 
 use crate::{
-    id::Pid,
-    master::{puppeter, Master, Puppeter},
-    prelude::Puppet,
-    puppet::LifecycleStatus,
+    pid::Pid,
+    puppet::{Lifecycle, LifecycleStatus, Puppet, PuppetState},
 };
 
-pub trait ReportFailure<P>
-where
-    P: Puppet,
-{
-    async fn report_failure(&self) {
-        // puppeter().report_failure::<P>(self).await
-    }
-
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet;
-}
-
 #[derive(Debug, Error)]
-#[error("Puppet does not exist: {name}")]
-pub struct PuppetDoesNotExist<P>
-where
-    P: Puppet,
-{
-    pub name: String,
-    _phantom: std::marker::PhantomData<P>,
+#[error("Puppet does not exist: {puppet}")]
+pub struct PuppetDoesNotExistError {
+    pub(crate) puppet: Pid,
 }
 
-impl<P> PuppetDoesNotExist<P>
-where
-    P: Puppet,
-{
-    pub fn new() -> Self {
-        Self {
-            name: type_name::<P>().to_string(),
-            _phantom: std::marker::PhantomData,
-        }
+impl PuppetDoesNotExistError {
+    pub fn new(puppet: Pid) -> Self {
+        Self { puppet }
     }
-}
-
-impl<P: Puppet> ReportFailure<P> for PuppetDoesNotExist<P> {
-    fn handle_error(&self, puppeter: &Puppeter)
+    pub fn from_type<P>() -> Self
     where
-        P: Puppet,
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
     {
-        tracing::warn!(name = %self.name, "Puppet does not exist.");
+        Self::new(Pid::new::<P>())
+    }
+}
+
+impl From<PuppetDoesNotExistError> for PuppetError {
+    fn from(value: PuppetDoesNotExistError) -> Self {
+        CriticalError::new(value.puppet, value.to_string()).into()
     }
 }
 
 #[derive(Debug, Error)]
-#[error("Puppet already exist: {name}")]
-pub struct PuppetAlreadyExist<P>
-where
-    P: Puppet,
-{
-    pub name: String,
-    _phantom: std::marker::PhantomData<P>,
+#[error("Puppet already exist: {puppet}")]
+pub struct PuppetAlreadyExist {
+    pub(crate) puppet: Pid,
 }
 
-impl<P> PuppetAlreadyExist<P>
-where
-    P: Puppet,
-{
-    pub fn new() -> Self {
-        Self {
-            name: type_name::<P>().to_string(),
-            _phantom: std::marker::PhantomData,
-        }
+impl From<PuppetAlreadyExist> for PuppetError {
+    fn from(value: PuppetAlreadyExist) -> Self {
+        CriticalError::new(value.puppet, value.to_string()).into()
     }
 }
 
-impl<P: Puppet> ReportFailure<P> for PuppetAlreadyExist<P> {
-    fn handle_error(&self, puppeter: &Puppeter) {
-        tracing::warn!(name = %self.name, "Puppet already exist.");
+impl PuppetAlreadyExist {
+    pub fn new(puppet: Pid) -> Self {
+        Self { puppet }
+    }
+    pub fn from_type<P>() -> Self
+    where
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
+    {
+        Self::new(Pid::new::<P>())
     }
 }
 
 #[derive(Debug, Error)]
-pub struct PermissionDenied<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    pub master: String,
-    pub puppet: String,
+pub struct PermissionDeniedError {
+    pub master: Pid,
+    pub puppet: Pid,
     pub message: Option<String>,
-    _phantom: std::marker::PhantomData<(M, P)>,
 }
 
-impl<M, P> fmt::Display for PermissionDenied<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
+impl fmt::Display for PermissionDeniedError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
@@ -112,18 +79,22 @@ where
     }
 }
 
-impl<M, P> PermissionDenied<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    pub fn new() -> Self {
+impl PermissionDeniedError {
+    pub fn new(master: Pid, puppet: Pid) -> Self {
         Self {
-            master: type_name::<M>().to_string(),
-            puppet: type_name::<P>().to_string(),
+            master,
+            puppet,
             message: None,
-            _phantom: std::marker::PhantomData,
         }
+    }
+    pub fn from_type<M, P>() -> Self
+    where
+        M: PuppetState,
+        Puppet<M>: Lifecycle,
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
+    {
+        Self::new(Pid::new::<M>(), Pid::new::<P>())
     }
     pub fn with_message(mut self, message: impl Into<String>) -> Self {
         self.message = Some(message.into());
@@ -137,493 +108,192 @@ where
     }
 }
 
-impl<M, P> ReportFailure<P> for PermissionDenied<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        tracing::warn!(
-            master = %self.master,
-            puppet = %self.puppet,
-            message = %self.message_or_default(),
-            "Permission denied."
-        );
+impl From<PermissionDeniedError> for PuppetError {
+    fn from(value: PermissionDeniedError) -> Self {
+        CriticalError::new(value.puppet, value.to_string()).into()
     }
 }
 
 #[derive(Debug, Error)]
-#[error("Puppet {name} cannot handle message. Status: {status}.")]
-pub struct PuppetCannotHandleMessage<P>
-where
-    P: Puppet,
-{
-    pub name: String,
+#[error("Puppet {puppet} cannot handle message. Status: {status}.")]
+pub struct PuppetCannotHandleMessage {
+    pub puppet: Pid,
     pub status: LifecycleStatus,
-    _phantom: std::marker::PhantomData<P>,
 }
 
-impl<P> PuppetCannotHandleMessage<P>
-where
-    P: Puppet,
-{
-    pub fn new(status: LifecycleStatus) -> Self {
+impl From<PuppetCannotHandleMessage> for PuppetError {
+    fn from(value: PuppetCannotHandleMessage) -> Self {
+        NonCriticalError::new(value.puppet, value.to_string()).into()
+    }
+}
+
+impl PuppetCannotHandleMessage {
+    pub fn new(puppet: Pid, status: LifecycleStatus) -> Self {
+        Self { puppet, status }
+    }
+    pub fn from_type<P>(status: LifecycleStatus) -> Self
+    where
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
+    {
+        Self::new(Pid::new::<P>(), status)
+    }
+}
+
+#[derive(Error, Debug, Clone)]
+#[error(
+    "Non-critical error occurred in puppet {puppet}: '{message}'. Supervisor will not be notified."
+)]
+pub struct NonCriticalError {
+    pub puppet: Pid,
+    pub message: String,
+}
+
+impl NonCriticalError {
+    pub fn new(puppet: Pid, message: impl ToString) -> Self {
         Self {
-            name: type_name::<P>().to_string(),
-            status,
-            _phantom: std::marker::PhantomData,
+            puppet,
+            message: message.to_string(),
         }
     }
-}
-
-impl<P> ReportFailure<P> for PuppetCannotHandleMessage<P>
-where
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter) {
-        tracing::warn!(
-            name = %self.name,
-            status = ?self.status,
-            "Puppet cannot handle message."
-        );
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum StartPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    #[error(transparent)]
-    PuppetDoesNotExist(#[from] PuppetDoesNotExist<P>),
-    #[error(transparent)]
-    PostmanError(#[from] PostmanError<P>),
-    #[error(transparent)]
-    PermissionDenied(#[from] PermissionDenied<M, P>),
-    #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
-}
-
-impl<M, P> ReportFailure<P> for StartPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
+    pub fn from_type<P>(message: impl ToString) -> Self
     where
-        P: Puppet,
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
     {
-        match self {
-            StartPuppetError::PuppetDoesNotExist(e) => e.handle_error(puppeter),
-            StartPuppetError::PostmanError(e) => e.handle_error(puppeter),
-            StartPuppetError::PermissionDenied(e) => e.handle_error(puppeter),
-            StartPuppetError::PuppetError(e) => e.handle_error(puppeter),
-        }
+        Self::new(Pid::new::<P>(), message)
     }
 }
 
-#[derive(Debug, Error)]
-pub enum StopPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    #[error(transparent)]
-    PuppetDoesNotExist(#[from] PuppetDoesNotExist<P>),
-    #[error(transparent)]
-    PostmanError(#[from] PostmanError<P>),
-    #[error(transparent)]
-    PermissionDenied(#[from] PermissionDenied<M, P>),
-    #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
+#[derive(Error, Debug, Clone)]
+#[error("Critical error occurred in puppet {puppet}: '{message}'. Supervisor will be notified.")]
+pub struct CriticalError {
+    pub puppet: Pid,
+    pub message: String,
 }
 
-impl<M, P> ReportFailure<P> for StopPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
+impl CriticalError {
+    pub fn new(puppet: Pid, message: impl ToString) -> Self {
+        Self {
+            puppet,
+            message: message.to_string(),
+        }
+    }
+    pub fn from_type<P>(message: impl ToString) -> Self
     where
-        P: Puppet,
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
     {
-        match self {
-            StopPuppetError::PuppetDoesNotExist(e) => e.handle_error(puppeter),
-            StopPuppetError::PostmanError(e) => e.handle_error(puppeter),
-            StopPuppetError::PermissionDenied(e) => e.handle_error(puppeter),
-            StopPuppetError::PuppetError(e) => e.handle_error(puppeter),
+        Self::new(Pid::new::<P>(), message)
+    }
+}
+
+#[derive(Error, Debug, Clone)]
+pub enum PuppetError {
+    #[error(transparent)]
+    NonCritical(#[from] NonCriticalError),
+    #[error(transparent)]
+    Critical(#[from] CriticalError),
+}
+
+impl PuppetError {
+    pub fn non_critical(puppet: Pid, message: impl ToString) -> Self {
+        NonCriticalError::new(puppet, message).into()
+    }
+    pub fn critical(puppet: Pid, message: impl ToString) -> Self {
+        CriticalError::new(puppet, message).into()
+    }
+}
+
+#[derive(Debug, Error)]
+#[error("Reached max retry limit: {message}")]
+pub struct RetryError {
+    pub message: String,
+}
+
+impl RetryError {
+    pub fn new(message: impl ToString) -> Self {
+        Self {
+            message: message.to_string(),
         }
     }
 }
 
 #[derive(Debug, Error)]
-pub enum ResetPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
+pub enum PuppetSendMessageError {
     #[error(transparent)]
-    PuppetDoesNotExist(#[from] PuppetDoesNotExist<P>),
+    PuppetDosNotExist(#[from] PuppetDoesNotExistError),
     #[error(transparent)]
-    PostmanError(#[from] PostmanError<P>),
-    #[error(transparent)]
-    PermissionDenied(#[from] PermissionDenied<M, P>),
-    #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
+    PostmanError(#[from] PostmanError),
 }
 
-impl<M, P> ReportFailure<P> for ResetPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        match self {
-            ResetPuppetError::PuppetDoesNotExist(e) => e.handle_error(puppeter),
-            ResetPuppetError::PostmanError(e) => e.handle_error(puppeter),
-            ResetPuppetError::PermissionDenied(e) => e.handle_error(puppeter),
-            ResetPuppetError::PuppetError(e) => e.handle_error(puppeter),
-        }
-    }
+#[derive(Debug, Error)]
+pub enum PuppetSendCommandError {
+    #[error(transparent)]
+    PuppetDosNotExist(#[from] PuppetDoesNotExistError),
+    #[error(transparent)]
+    PermissionDenied(#[from] PermissionDeniedError),
+    #[error(transparent)]
+    PostmanError(#[from] PostmanError),
 }
 
-impl<M, P> From<StopPuppetError<M, P>> for ResetPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn from(value: StopPuppetError<M, P>) -> Self {
-        match value {
-            StopPuppetError::PuppetDoesNotExist(e) => ResetPuppetError::PuppetDoesNotExist(e),
-            StopPuppetError::PostmanError(e) => ResetPuppetError::PostmanError(e),
-            StopPuppetError::PermissionDenied(e) => ResetPuppetError::PermissionDenied(e),
-            StopPuppetError::PuppetError(e) => ResetPuppetError::PuppetError(e),
+impl From<PuppetSendCommandError> for PuppetError {
+    fn from(err: PuppetSendCommandError) -> PuppetError {
+        match err {
+            PuppetSendCommandError::PuppetDosNotExist(err) => err.into(),
+            PuppetSendCommandError::PermissionDenied(err) => err.into(),
+            PuppetSendCommandError::PostmanError(err) => err.into(),
         }
     }
 }
 
 #[derive(Debug, Error)]
-pub enum KillPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    #[error(transparent)]
-    PuppetDoesNotExist(#[from] PuppetDoesNotExist<P>),
-    #[error(transparent)]
-    PostmanError(#[from] PostmanError<P>),
-    #[error(transparent)]
-    PermissionDenied(#[from] PermissionDenied<M, P>),
-    #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
-}
-
-impl<M, P> ReportFailure<P> for KillPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        match self {
-            KillPuppetError::PuppetDoesNotExist(e) => e.handle_error(puppeter),
-            KillPuppetError::PostmanError(e) => e.handle_error(puppeter),
-            KillPuppetError::PermissionDenied(e) => e.handle_error(puppeter),
-            KillPuppetError::PuppetError(e) => e.handle_error(puppeter),
-        }
-    }
-}
-
-impl<M, P> From<StopPuppetError<M, P>> for KillPuppetError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn from(value: StopPuppetError<M, P>) -> Self {
-        match value {
-            StopPuppetError::PuppetDoesNotExist(e) => KillPuppetError::PuppetDoesNotExist(e),
-            StopPuppetError::PostmanError(e) => KillPuppetError::PostmanError(e),
-            StopPuppetError::PermissionDenied(e) => KillPuppetError::PermissionDenied(e),
-            StopPuppetError::PuppetError(e) => KillPuppetError::PuppetError(e),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum IdentificationError {
-    #[error("Puppet already exists: {0}")]
-    PuppetAlreadyExists(Pid),
-    #[error("Puppet does not exist: {0}")]
-    PuppetDoesNotExist(Pid),
-}
-
-impl<P: Puppet> ReportFailure<P> for IdentificationError {
-    fn handle_error(&self, puppeter: &Puppeter) {
-        match self {
-            IdentificationError::PuppetAlreadyExists(id) => {
-                tracing::warn!(id = %id, "Puppet already exists.")
-            }
-            IdentificationError::PuppetDoesNotExist(id) => {
-                tracing::warn!(id = %id, "Puppet does not exist.")
-            }
-        }
-    }
-}
-
-#[derive(Error, Debug)]
-pub enum PuppetError<P: Puppet> {
-    #[error("Non-critical error occurred: '{0}'. Supervisor will not be notified.")]
-    NonCritical(String),
-
-    #[error("Critical error occurred: '{0}'. Supervisor will be notified.")]
-    Critical(String),
-
-    #[error("Fatal error occurred: '{0}'. Supervisor will be notified.")]
-    Fatal(String),
-
-    #[error(transparent)]
-    PuppetCannotHandleMessage(#[from] PuppetCannotHandleMessage<P>),
-}
-
-impl<P> ReportFailure<P> for PuppetError<P>
-where
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        // TODO:
-        match self {
-            PuppetError::NonCritical(e) => tracing::warn!(%e, "Non-critical error occurred."),
-            PuppetError::Critical(e) => tracing::error!(%e, "Critical error occurred."),
-            PuppetError::Fatal(e) => tracing::error!(%e, "Fatal error occurred."),
-            PuppetError::PuppetCannotHandleMessage(e) => e.handle_error(puppeter),
-        }
-    }
-}
-
-impl<P> From<PuppetError<P>> for String
-where
-    P: Puppet,
-{
-    fn from(value: PuppetError<P>) -> Self {
-        match value {
-            PuppetError::NonCritical(s) => s,
-            PuppetError::Critical(s) => s,
-            PuppetError::Fatal(s) => s,
-            PuppetError::PuppetCannotHandleMessage(e) => e.to_string(),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum PuppeterSendMessageError<P>
-where
-    P: Puppet,
-{
-    #[error("Puppet {name} send channel closed.")]
-    PuppetSendChannelClosed { name: String },
-    #[error("Puppet {name} receive channel closed.")]
-    PuppetReceiveChannelClosed { name: String },
-    #[error("Puppet {name} response channel closed.")]
-    PuppetResponseChannelClosed { name: String },
-    #[error("Puppet {name} response timeout.")]
-    RequestTimeout { name: String },
-    #[error("Puppet {name} does not exist.")]
-    PuppetDoesNotExist { name: String },
-    #[error(transparent)]
-    PuppetCannotHandleMessage(#[from] PuppetCannotHandleMessage<P>),
-    #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
-}
-
-impl<P> ReportFailure<P> for PuppeterSendMessageError<P>
-where
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        match self {
-            PuppeterSendMessageError::PuppetSendChannelClosed { name } => {
-                tracing::warn!(name = %name, "Puppet send channel closed.")
-            }
-            PuppeterSendMessageError::PuppetReceiveChannelClosed { name } => {
-                tracing::warn!(name = %name, "Puppet receive channel closed.")
-            }
-            PuppeterSendMessageError::PuppetResponseChannelClosed { name } => {
-                tracing::warn!(name = %name, "Puppet response channel closed.")
-            }
-            PuppeterSendMessageError::RequestTimeout { name } => {
-                tracing::warn!(name = %name, "Puppet response timeout.")
-            }
-            PuppeterSendMessageError::PuppetDoesNotExist { name } => {
-                tracing::warn!(name = %name, "Puppet does not exist.")
-            }
-            PuppeterSendMessageError::PuppetCannotHandleMessage(e) => e.handle_error(puppeter),
-            PuppeterSendMessageError::PuppetError(e) => e.handle_error(puppeter),
-        }
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum PostmanError<P>
-where
-    P: Puppet,
-{
+pub enum PostmanError {
     #[error("Can't send message. Channel closed.")]
-    SendError,
+    SendError { puppet: Pid },
     #[error("Can't receive message. Channel closed.")]
-    ReceiveError,
+    ReceiveError { puppet: Pid },
     #[error("Can't receive response. Channel closed.")]
-    ResponseReceiveError,
+    ResponseReceiveError { puppet: Pid },
     #[error("Can't reveive response. Response timeout.")]
-    ResponseTimeout,
+    ResponseTimeout { puppet: Pid },
     #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
+    PuppetError(#[from] PuppetError),
 }
 
-impl<P> ReportFailure<P> for PostmanError<P>
-where
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        match self {
-            PostmanError::SendError => tracing::warn!("Can't send message. Channel closed."),
-            PostmanError::ReceiveError => tracing::warn!("Can't receive message. Channel closed."),
-            PostmanError::ResponseReceiveError => {
-                tracing::warn!("Can't receive response. Channel closed.")
-            }
-            PostmanError::ResponseTimeout => {
-                tracing::warn!("Can't reveive response. Response timeout.")
-            }
-            PostmanError::PuppetError(e) => e.handle_error(puppeter),
-        }
-    }
-}
-
-impl<P> From<(PostmanError<P>, String)> for PuppeterSendMessageError<P>
-where
-    P: Puppet,
-{
-    fn from(err: (PostmanError<P>, String)) -> Self {
-        let (postman_error, name) = err;
-        match postman_error {
-            PostmanError::SendError => PuppeterSendMessageError::PuppetSendChannelClosed { name },
-            PostmanError::ReceiveError => {
-                PuppeterSendMessageError::PuppetReceiveChannelClosed { name }
-            }
-            PostmanError::ResponseReceiveError => {
-                PuppeterSendMessageError::PuppetResponseChannelClosed { name }
-            }
-            PostmanError::ResponseTimeout => PuppeterSendMessageError::RequestTimeout { name },
-            PostmanError::PuppetError(e) => PuppeterSendMessageError::PuppetError(e),
-        }
-    }
-}
-
-impl<M, P> From<(PostmanError<P>, String)> for PuppeterSendCommandError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
-    fn from(err: (PostmanError<P>, String)) -> Self {
-        let (postman_error, name) = err;
-        match postman_error {
-            PostmanError::SendError => PuppeterSendCommandError::PuppetSendChannelClosed { name },
-            PostmanError::ReceiveError => {
-                PuppeterSendCommandError::PuppetReceiveChannelClosed { name }
-            }
-            PostmanError::ResponseReceiveError => {
-                PuppeterSendCommandError::PuppetResponseChannelClosed { name }
-            }
-            PostmanError::ResponseTimeout => unreachable!(),
-            PostmanError::PuppetError(e) => PuppeterSendCommandError::PuppetError(e),
+impl From<PostmanError> for PuppetError {
+    fn from(err: PostmanError) -> PuppetError {
+        match err {
+            PostmanError::SendError { puppet } => CriticalError::new(puppet, err).into(),
+            PostmanError::ReceiveError { puppet } => CriticalError::new(puppet, err).into(),
+            PostmanError::ResponseReceiveError { puppet } => CriticalError::new(puppet, err).into(),
+            PostmanError::ResponseTimeout { puppet } => CriticalError::new(puppet, err).into(),
+            PostmanError::PuppetError(err) => err,
         }
     }
 }
 
 #[derive(Debug, Error)]
-pub enum PuppeterSpawnError<P>
-where
-    P: Puppet,
-{
+pub enum PuppetRegisterError {
     #[error(transparent)]
-    PuppetDoesNotExist(#[from] PuppetDoesNotExist<P>),
+    PuppetDoesNotExist(#[from] PuppetDoesNotExistError),
     #[error(transparent)]
-    PuppetAlreadyExist(#[from] PuppetAlreadyExist<P>),
+    PuppetAlreadyExist(#[from] PuppetAlreadyExist),
 }
 
-impl<P> ReportFailure<P> for PuppeterSpawnError<P>
-where
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        match self {
-            PuppeterSpawnError::PuppetDoesNotExist(e) => e.handle_error(puppeter),
-            PuppeterSpawnError::PuppetAlreadyExist(e) => e.handle_error(puppeter),
+impl From<PuppetRegisterError> for PuppetError {
+    fn from(err: PuppetRegisterError) -> PuppetError {
+        match err {
+            PuppetRegisterError::PuppetDoesNotExist(err) => err.into(),
+            PuppetRegisterError::PuppetAlreadyExist(err) => err.into(),
         }
     }
 }
 
 #[derive(Debug, Error)]
-pub enum PuppeterSendCommandError<M, P>
-where
-    M: Master,
-    P: Puppet,
-{
+pub enum PuppetOperationError {
     #[error(transparent)]
-    PermissionDenied(#[from] PermissionDenied<M, P>),
+    PermissionDenied(#[from] PermissionDeniedError),
     #[error(transparent)]
-    PuppetDoesNotExist(#[from] PuppetDoesNotExist<P>),
-    #[error(transparent)]
-    PuppetError(#[from] PuppetError<P>),
-    #[error("Puppet {name} send channel closed.")]
-    PuppetSendChannelClosed { name: String },
-    #[error("Puppet {name} receive channel closed.")]
-    PuppetReceiveChannelClosed { name: String },
-    #[error("Puppet {name} response channel closed.")]
-    PuppetResponseChannelClosed { name: String },
-}
-
-impl<P> ReportFailure<P> for PuppeterSendCommandError<Puppeter, P>
-where
-    P: Puppet,
-{
-    fn handle_error(&self, puppeter: &Puppeter)
-    where
-        P: Puppet,
-    {
-        match self {
-            PuppeterSendCommandError::PermissionDenied(e) => e.handle_error(puppeter),
-            PuppeterSendCommandError::PuppetDoesNotExist(e) => e.handle_error(puppeter),
-            PuppeterSendCommandError::PuppetError(e) => e.handle_error(puppeter),
-            PuppeterSendCommandError::PuppetSendChannelClosed { name } => {
-                tracing::warn!(name = %name, "Puppet send channel closed.")
-            }
-            PuppeterSendCommandError::PuppetReceiveChannelClosed { name } => {
-                tracing::warn!(name = %name, "Puppet receive channel closed.")
-            }
-            PuppeterSendCommandError::PuppetResponseChannelClosed { name } => {
-                tracing::warn!(name = %name, "Puppet response channel closed.")
-            }
-        }
-    }
+    PuppetDoesNotExist(#[from] PuppetDoesNotExistError),
 }

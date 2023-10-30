@@ -1,6 +1,6 @@
 edition = "2021"
 max_width = 100
-wrap_comments = true
+# wrap_comments = true
 condense_wildcard_suffixes = true
 force_multiline_blocks = true
 doc_comment_code_block_width = 100

@@ -1,10 +1,10 @@
 [package]
-name = "puppeter"
+name = "praxis"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-puppeter-derive = { path = "./puppeter-derive", optional = true }
+praxis-derive = { path = "./praxis-derive", optional = true }
 rayon = { version = "1.8.0", optional = true }
 # pollster = { version = "0.3.0", optional = true }
 ahash = "0.8"
@@ -16,9 +16,14 @@ tokio = { version = "1.32", features = ["full"] }
 tracing = "0.1"
 indexmap = "2.0.2"
 rustc-hash = "1.1.0"
+anyhow = "1.0.75"
+flume = "0.11.0"
+parking_lot = "0.12.1"
+crossbeam = { version = "0.8.2", features = ["crossbeam-channel"] }
+kanal = "0.1.0-pre8"
 
 [dev-dependencies]
-puppeter-derive = { path = "./puppeter-derive" }
+praxis-derive = { path = "./praxis-derive" }
 actix = "0.13.1"
 vin = "9.1"
 ractor = "0.9"
@@ -26,12 +31,12 @@ criterion = "0.5"
 coerce = "0.8.10"
 
 [features]
-derive = ["dep:puppeter-derive"]
+derive = ["dep:praxis-derive"]
 rayon = ["dep:rayon"]
 
-[[bench]]
-name = "minions_bench"
-harness = false
+# [[bench]]
+# name = "minions_bench"
+# harness = false
 
 [[bench]]
 name = "tokio_bench"
@@ -53,5 +58,14 @@ harness = false
 name = "coerce_bench"
 harness = false
 
+[[bench]]
+name = "primitives_bench"
+harness = false
+
 [profile.bench]
-debug = true
+opt-level = 3
+codegen-units = 1
+target-cpu = "native"
+lto = true
+overflow-checks = false
+debug = false
