@@ -28,12 +28,13 @@ use crate::{
     },
     pid::{Id, Pid},
     post_office::{self, PostOffice},
-    supervision::{SupervisionConfig, SupervisionStrategy},
+    supervision::{RetryConfig, SupervisionStrategy},
     BoxedAny,
 };
 
 #[async_trait]
 pub trait Lifecycle: Send + Sync + Sized + 'static {
+    type Supervision: SupervisionStrategy + Send + Sync;
     async fn on_init(&mut self) -> Result<(), PuppetError> {
         tracing::debug!("Initializing puppet {}", type_name::<Self>());
         Ok(())
@@ -62,7 +63,7 @@ pub enum LifecycleStatus {
     Failed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Puppet<P>
 where
     P: PuppetState,
@@ -70,11 +71,10 @@ where
 {
     pub pid: Pid,
     pub state: P,
-    pub(crate) status_tx: watch::Sender<LifecycleStatus>,
     pub(crate) message_tx: Postman<P>,
     pub(crate) context: Arc<Mutex<HashMap<Id, BoxedAny>>>,
     pub(crate) post_office: PostOffice,
-    pub(crate) supervision_config: SupervisionConfig,
+    pub(crate) retry_config: RetryConfig,
 }
 
 pub struct PuppetBuilder<P> {
@@ -82,7 +82,7 @@ pub struct PuppetBuilder<P> {
     pub messages_bufer_size: NonZeroUsize,
     pub commands_bufer_size: NonZeroUsize,
     pub(crate) post_office: Option<PostOffice>,
-    pub supervision_config: Option<SupervisionConfig>,
+    pub retry_config: Option<RetryConfig>,
 }
 
 impl<P> PuppetBuilder<P>
@@ -95,7 +95,7 @@ where
             messages_bufer_size: NonZeroUsize::new(1024).unwrap(),
             commands_bufer_size: NonZeroUsize::new(16).unwrap(),
             post_office: None,
-            supervision_config: Some(Default::default()),
+            retry_config: Some(Default::default()),
         }
     }
 
@@ -106,11 +106,6 @@ where
 
     pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.commands_bufer_size = size;
-        self
-    }
-
-    pub fn with_supervision_config(mut self, config: impl Into<SupervisionConfig>) -> Self {
-        self.supervision_config = Some(config.into());
         self
     }
 
@@ -199,7 +194,7 @@ where
                         self.set_status(LifecycleStatus::Active);
                     }
                     Err(PuppetError::Critical(_)) => {
-                        if self.supervision_config.retry.increment_retry().is_err() {
+                        if self.retry_config.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during start");
                             // If the maximum retry attempts are reached during `on_start`
@@ -210,7 +205,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            self.supervision_config.retry.maybe_wait().await;
+                            self.retry_config.maybe_wait().await;
                             continue;
                         }
                     }
@@ -227,7 +222,7 @@ where
                         start_all_puppets_done = true;
                     }
                     Err(PuppetError::Critical(_)) => {
-                        if self.supervision_config.retry.increment_retry().is_err() {
+                        if self.retry_config.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during start");
                             // If the maximum retry attempts are reached during `start_all_puppets`
@@ -238,7 +233,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            self.supervision_config.retry.maybe_wait().await;
+                            self.retry_config.maybe_wait().await;
                             continue;
                         }
                     }
@@ -304,7 +299,7 @@ where
                 match self.stop_all_puppets(&service_command).await {
                     Ok(_) | Err(PuppetError::NonCritical(_)) => stop_all_puppets_done = true,
                     Err(PuppetError::Critical(_)) => {
-                        if self.supervision_config.retry.increment_retry().is_err() {
+                        if self.retry_config.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `stop_all_puppets`,
@@ -315,7 +310,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            self.supervision_config.retry.maybe_wait().await;
+                            self.retry_config.maybe_wait().await;
                             continue;
                         }
                     }
@@ -331,7 +326,7 @@ where
                         self.set_status(LifecycleStatus::Inactive);
                     }
                     Err(PuppetError::Critical(_)) => {
-                        if self.supervision_config.retry.increment_retry().is_err() {
+                        if self.retry_config.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `on_stop`,
@@ -342,7 +337,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            self.supervision_config.retry.maybe_wait().await;
+                            self.retry_config.maybe_wait().await;
                             continue;
                         }
                     }
@@ -401,14 +396,7 @@ where
     }
 
     pub(crate) fn set_status(&self, status: LifecycleStatus) {
-        self.status_tx.send_if_modified(|s| {
-            if s != &status {
-                *s = status;
-                true
-            } else {
-                false
-            }
-        });
+        self.post_office.set_status_by_pid(self.pid, status)
     }
 
     pub fn has_puppet<M, P>(&self) -> Option<bool>
@@ -485,10 +473,12 @@ where
             // Do nothing
             PuppetError::NonCritical(_) => {}
             PuppetError::Critical(_) => {
-                if let Err(err) = self
-                    .supervision_config
-                    .handle_failure(&self.post_office, self.pid, puppet)
-                    .await
+                if let Err(err) = <Self as Lifecycle>::Supervision::handle_failure(
+                    &self.post_office,
+                    self.pid,
+                    puppet,
+                )
+                .await
                 {
                     match err {
                         // Do nothing
@@ -679,7 +669,7 @@ where
     E: Message,
 {
     type Response: Send + 'static;
-    type Executor: Executor<E> + Send + 'static = SequentialExecutor;
+    type Executor: Executor<E> + Send + 'static;
 
     async fn handle_message(&mut self, msg: E) -> Result<Self::Response, PuppetError>;
 }
@@ -700,9 +690,13 @@ where
 #[cfg(test)]
 mod tests {
 
+    use std::time::Duration;
+
     use praxis_derive::Message;
 
-    use crate::errors::NonCriticalError;
+    use crate::{
+        errors::NonCriticalError, executor::ConcurrentExecutor, supervision::strategy::OneForAll,
+    };
 
     use super::*;
 
@@ -716,7 +710,9 @@ mod tests {
         #[derive(Debug, Default, Clone)]
         pub struct MasterActor {}
 
-        impl Lifecycle for Puppet<MasterActor> {}
+        impl Lifecycle for Puppet<MasterActor> {
+            type Supervision = OneForAll;
+        }
 
         #[derive(Debug, Default, Clone)]
         pub struct SleepActor {
@@ -725,6 +721,7 @@ mod tests {
 
         #[async_trait]
         impl Lifecycle for Puppet<SleepActor> {
+            type Supervision = OneForAll;
             async fn on_start(&mut self) -> Result<(), PuppetError> {
                 println!("Starting:");
                 Ok(())
@@ -738,13 +735,15 @@ mod tests {
         #[async_trait]
         impl Handler<SleepMessage> for Puppet<SleepActor> {
             type Response = i32;
+            type Executor = ConcurrentExecutor;
 
             async fn handle_message(
                 &mut self,
                 msg: SleepMessage,
             ) -> Result<Self::Response, PuppetError> {
                 println!("Sleeping: {:?}", self.state.i);
-                Err(CriticalError::new(self.pid, "foo").into())
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                Ok(1)
             }
         }
 
@@ -762,7 +761,12 @@ mod tests {
             .await
             .unwrap();
 
-        let res = sleep_actor.ask(SleepMessage { i: 1 }).await;
+        for _ in 0..5 {
+            sleep_actor
+                .send(SleepMessage { i: 1 })
+                .await
+                .expect("Failed to send message");
+        }
 
         // if let Err(err) = res {}
 

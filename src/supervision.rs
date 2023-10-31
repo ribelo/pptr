@@ -116,39 +116,9 @@ impl RetryConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct SupervisionConfig {
-    pub strategy: Arc<dyn SupervisionStrategy + Send + Sync + 'static>,
-    pub retry: RetryConfig,
-}
-
-impl Default for SupervisionConfig {
-    fn default() -> Self {
-        SupervisionConfig {
-            strategy: Arc::new(strategy::OneToOne),
-            retry: RetryConfig::default(),
-        }
-    }
-}
-
-#[async_trait]
-impl SupervisionStrategy for SupervisionConfig {
-    async fn handle_failure(
-        &self,
-        post_office: &PostOffice,
-        master: Pid,
-        puppet: Pid,
-    ) -> Result<(), PuppetError> {
-        self.strategy
-            .handle_failure(post_office, master, puppet)
-            .await
-    }
-}
-
 #[async_trait]
 pub trait SupervisionStrategy: fmt::Debug {
     async fn handle_failure(
-        &self,
         post_office: &PostOffice,
         master: Pid,
         puppet: Pid,
@@ -158,7 +128,6 @@ pub trait SupervisionStrategy: fmt::Debug {
 #[async_trait]
 impl SupervisionStrategy for strategy::OneToOne {
     async fn handle_failure(
-        &self,
         post_office: &PostOffice,
         master: Pid,
         puppet: Pid,
@@ -172,7 +141,6 @@ impl SupervisionStrategy for strategy::OneToOne {
 #[async_trait]
 impl SupervisionStrategy for strategy::OneForAll {
     async fn handle_failure(
-        &self,
         post_office: &PostOffice,
         master: Pid,
         _puppet: Pid,
@@ -191,7 +159,6 @@ impl SupervisionStrategy for strategy::OneForAll {
 #[async_trait]
 impl SupervisionStrategy for strategy::RestForOne {
     async fn handle_failure(
-        &self,
         post_office: &PostOffice,
         master: Pid,
         puppet: Pid,

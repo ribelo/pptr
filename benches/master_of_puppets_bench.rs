@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, Criterion};
-use praxis::{message::Message, puppet::Puppet,
+use praxis::{message::Message, puppet::{Puppet, Lifecycle, Handler},
 };
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 struct PingMessage(usize);
 
 impl Message for PingMessage {}
@@ -13,26 +13,28 @@ struct PingActor {
     count: usize,
 }
 
-impl Puppet for PingActor {}
+type Foo = Puppet<PingActor>;
+
+impl Lifecycle for Foo {}
 
 #[derive(Clone, Default)]
 struct ConcurrentPingActor {
     count: usize,
 }
 
-impl Puppet for ConcurrentPingActor {}
+impl Lifecycle for ConcurrentPingActor {}
 
 #[derive(Clone, Default)]
 struct ParallelPingActor {
     count: usize,
 }
 
-impl Puppet for ParallelPingActor {}
+// impl Lifecycle for ParallelPingActor {}
 
 #[async_trait]
-impl Handler<PingMessage> for PingActor {
+impl Handler<PingMessage> for Puppet<PingActor> {
     type Response = usize;
-    type Exec = execution::Sequential;
+    type Executor = SequentialExecutor;
     async fn handle_message(&mut self, msg: PingMessage) -> Result<usize,
 PuppetError> {         self.count += msg.0;
         Ok(self.count)

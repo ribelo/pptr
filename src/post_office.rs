@@ -33,7 +33,13 @@ pub struct PostOffice {
 pub struct PostOfficeInner {
     pub(crate) message_postmans: HashMap<Pid, BoxedAny>,
     pub(crate) service_postmans: HashMap<Pid, ServicePostman>,
-    pub(crate) statuses: HashMap<Pid, watch::Receiver<LifecycleStatus>>,
+    pub(crate) statuses: HashMap<
+        Pid,
+        (
+            watch::Sender<LifecycleStatus>,
+            watch::Receiver<LifecycleStatus>,
+        ),
+    >,
     pub(crate) master_to_puppets: HashMap<Pid, IndexSet<Pid>>,
     pub(crate) puppet_to_master: HashMap<Pid, Pid>,
 }
@@ -72,6 +78,7 @@ impl PostOffice {
         &self,
         postman: Postman<P>,
         service_postman: ServicePostman,
+        status_tx: watch::Sender<LifecycleStatus>,
         status_rx: watch::Receiver<LifecycleStatus>,
     ) -> Result<(), PuppetRegisterError>
     where
@@ -116,7 +123,7 @@ impl PostOffice {
         inner.puppet_to_master.insert(puppet, master);
 
         // Add the puppet's status receiver to the statuses map
-        inner.statuses.insert(puppet, status_rx);
+        inner.statuses.insert(puppet, (status_tx, status_rx));
 
         // Return a successful result indicating the registration was successful
         Ok(())
@@ -159,13 +166,31 @@ impl PostOffice {
             .cloned()
     }
 
+    pub(crate) fn set_status_by_pid(&self, puppet: Pid, status: LifecycleStatus) {
+        self.inner
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .statuses
+            .get(&puppet)
+            .map(|(tx, _)| {
+                tx.send_if_modified(|current| {
+                    if *current != status {
+                        *current = status;
+                        true
+                    } else {
+                        false
+                    }
+                })
+            });
+    }
+
     pub fn subscribe_status_by_pid(&self, puppet: Pid) -> Option<watch::Receiver<LifecycleStatus>> {
         self.inner
             .lock()
             .expect("Failed to acquire mutex lock")
             .statuses
             .get(&puppet)
-            .cloned()
+            .map(|(_, rx)| rx.clone())
     }
 
     pub fn get_status_by_pid(&self, puppet: Pid) -> Option<LifecycleStatus> {
@@ -174,7 +199,7 @@ impl PostOffice {
             .expect("Failed to acquire mutex lock")
             .statuses
             .get(&puppet)
-            .map(|rx| *rx.borrow())
+            .map(|(_, rx)| *rx.borrow())
     }
 
     pub fn has_puppet_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
@@ -385,17 +410,21 @@ impl PostOffice {
             mpsc::channel::<ServicePacket>(builder.commands_bufer_size.into());
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
-        self.register::<M, P>(postman.clone(), service_postman, status_rx.clone())?;
-        let supervision_config = builder.supervision_config.take().unwrap();
+        self.register::<M, P>(
+            postman.clone(),
+            service_postman,
+            status_tx,
+            status_rx.clone(),
+        )?;
+        let retry_config = builder.retry_config.take().unwrap();
 
         let mut puppet = Puppet {
             pid,
             state: builder.state.clone(),
-            status_tx,
             message_tx: postman.clone(),
             context: Default::default(),
             post_office: self.clone(),
-            supervision_config,
+            retry_config,
         };
 
         let handle = PuppetHandle {
