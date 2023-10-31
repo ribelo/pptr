@@ -1,6 +1,6 @@
-use std::{num::NonZeroUsize, sync::Arc};
+use std::num::NonZeroUsize;
 
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{mpsc, watch};
 
 use crate::{
     address::Address,
@@ -33,11 +33,12 @@ where
     let (tx, rx) = mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_bufer_size.into());
     let (command_tx, command_rx) =
         mpsc::channel::<ServicePacket>(builder.commands_bufer_size.into());
-    let supervision_config = Arc::new(builder.supervision_config.take().unwrap());
+    let supervision_config = builder.supervision_config.take().unwrap();
 
     let puppet = Puppet {
         pid,
         state: builder.state.clone(),
+        status_tx,
         context: master.context.clone(),
         post_office: master.post_office.clone(),
         supervision_config,
@@ -79,11 +80,13 @@ where
                     Ok(_) => {
                         if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
                             | LifecycleStatus::Failed) {
+                            println!("Stopping loop due to puppet status change");
                             tracing::info!(puppet = puppet.pid.to_string(),  "Stopping loop due to puppet status change");
                             break;
                         }
                     }
                     Err(_) => {
+                        println!("Stopping loop due to closed puppet status channel");
                         tracing::debug!(puppet = puppet.pid.to_string(),  "Stopping loop due to closed puppet status channel");
                         break;
                     }
@@ -91,18 +94,13 @@ where
             }
             res = handle.command_rx.recv() => {
                 match res {
-                    Some(ServicePacket {cmd, reply_address, ..}) => {
+                    Some(mut service_packet) => {
                         if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                            let mut cloned_pupped = puppet.clone();
-                            tokio::spawn(async move {
-                                let response = cloned_pupped.handle_command(cmd).await;
-                                // TODO: Handle error
-                                reply_address.send(response).unwrap();
-                            });
+                            service_packet.handle_command(&mut puppet).await;
                         } else {
                             tracing::debug!(puppet = puppet.pid.to_string(),  "Ignoring command due to non-Active puppet status");
                             let error_response = PuppetCannotHandleMessage::new(puppet.pid, *puppet_status.borrow()).into();
-                            reply_address.send(Err(error_response)).unwrap();
+                            service_packet.reply_error(error_response).await;
                         }
                     }
                     None => {

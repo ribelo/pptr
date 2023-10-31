@@ -21,6 +21,8 @@ flume = "0.11.0"
 parking_lot = "0.12.1"
 crossbeam = { version = "0.8.2", features = ["crossbeam-channel"] }
 kanal = "0.1.0-pre8"
+async-recursion = "1.0.5"
+futures = "0.3.29"
 
 [dev-dependencies]
 praxis-derive = { path = "./praxis-derive" }

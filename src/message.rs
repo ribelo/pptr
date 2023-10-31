@@ -68,7 +68,6 @@ where
     E: Message + 'static,
 {
     async fn handle_message(&mut self, puppet: &mut Puppet<P>) {
-        println!("Handle message {:?}", self.message);
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
         // TODO: Executors
@@ -78,7 +77,7 @@ where
                 // Do nothing
                 PuppetError::NonCritical(_) => {}
                 PuppetError::Critical(_) => {
-                    puppet.report_failure(err.clone());
+                    puppet.report_failure(err.clone()).await;
                 }
             }
         }
@@ -96,8 +95,8 @@ where
 }
 
 pub struct ServicePacket {
-    pub(crate) cmd: ServiceCommand,
-    pub(crate) reply_address: oneshot::Sender<Result<(), PuppetError>>,
+    pub(crate) cmd: Option<ServiceCommand>,
+    pub(crate) reply_address: Option<oneshot::Sender<Result<(), PuppetError>>>,
 }
 
 impl ServicePacket {
@@ -106,8 +105,45 @@ impl ServicePacket {
         reply_address: oneshot::Sender<Result<(), PuppetError>>,
     ) -> Self {
         Self {
-            cmd,
-            reply_address: reply_address,
+            cmd: Some(cmd),
+            reply_address: Some(reply_address),
+        }
+    }
+
+    pub fn without_reply(cmd: ServiceCommand) -> Self {
+        Self {
+            cmd: Some(cmd),
+            reply_address: None,
+        }
+    }
+
+    pub(crate) async fn handle_command<P>(&mut self, puppet: &mut Puppet<P>)
+    where
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
+    {
+        let cmd = self.cmd.take().unwrap();
+        let reply_address = self.reply_address.take();
+        let response = puppet.handle_command(cmd).await;
+        if let Err(err) = &response {
+            match err {
+                // Do nothing
+                PuppetError::NonCritical(_) => {}
+                PuppetError::Critical(_) => {
+                    puppet.report_failure(err.clone()).await;
+                }
+            }
+        }
+        if let Some(reply_address) = reply_address {
+            if let Err(err) = reply_address.send(response) {
+                // TODO:
+                // println!("Error sending reply {:?}", err);
+            }
+        }
+    }
+    pub(crate) async fn reply_error(&mut self, err: PuppetError) {
+        if let Some(reply_address) = self.reply_address.take() {
+            let _ = reply_address.send(Err(err));
         }
     }
 }
@@ -124,6 +160,7 @@ pub enum ServiceCommand {
     Stop,
     Restart { stage: Option<RestartStage> },
     ReportFailure { puppet: Pid, error: PuppetError },
+    Fail,
 }
 
 impl Message for ServiceCommand {}
@@ -232,6 +269,14 @@ pub struct ServicePostman {
 impl ServicePostman {
     pub fn new(tx: tokio::sync::mpsc::Sender<ServicePacket>) -> Self {
         Self { tx }
+    }
+
+    pub async fn send(&self, puppet: Pid, command: ServiceCommand) -> Result<(), PostmanError> {
+        let packet = ServicePacket::without_reply(command);
+        self.tx
+            .send(packet)
+            .await
+            .map_err(|_| PostmanError::SendError { puppet })
     }
 
     pub async fn send_and_await_response(
