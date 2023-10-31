@@ -379,10 +379,11 @@ impl PostOffice {
         let mut builder = builder.into();
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
-        let (tx, rx) = mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_bufer_size.into());
+        let (message_tx, message_rx) =
+            mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_bufer_size.into());
         let (command_tx, command_rx) =
             mpsc::channel::<ServicePacket>(builder.commands_bufer_size.into());
-        let postman = Postman::new(tx);
+        let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
         self.register::<M, P>(postman.clone(), service_postman, status_rx.clone())?;
         let supervision_config = builder.supervision_config.take().unwrap();
@@ -391,6 +392,7 @@ impl PostOffice {
             pid,
             state: builder.state.clone(),
             status_tx,
+            message_tx: postman.clone(),
             context: Default::default(),
             post_office: self.clone(),
             supervision_config,
@@ -399,7 +401,7 @@ impl PostOffice {
         let handle = PuppetHandle {
             pid,
             status_rx: status_rx.clone(),
-            message_rx: Mailbox::new(rx),
+            message_rx: Mailbox::new(message_rx),
             command_rx: ServiceMailbox::new(command_rx),
         };
 
@@ -407,8 +409,10 @@ impl PostOffice {
             pid,
             status_rx,
             message_tx: postman,
+            post_office: self.clone(),
         };
 
+        puppet.on_init().await?;
         puppet.start(false).await?;
 
         tokio::spawn(run_puppet_loop(puppet, handle));

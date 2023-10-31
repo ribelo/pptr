@@ -1,11 +1,13 @@
 use std::{
     any::type_name,
     num::NonZeroUsize,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
+use futures::Future;
 use rustc_hash::FxHashMap as HashMap;
 use tokio::{
     sync::{mpsc, oneshot, watch},
@@ -18,19 +20,24 @@ use crate::{
         CriticalError, PuppetError, PuppetRegisterError, PuppetSendCommandError,
         PuppetSendMessageError,
     },
-    master::{create_puppet_entities, run_puppet_loop},
+    executor::{Executor, SequentialExecutor},
+    master::run_puppet_loop,
     message::{
         Envelope, Mailbox, Message, Postman, RestartStage, ServiceCommand, ServiceMailbox,
         ServicePacket, ServicePostman,
     },
     pid::{Id, Pid},
     post_office::{self, PostOffice},
-    supervision::SupervisionConfig,
+    supervision::{SupervisionConfig, SupervisionStrategy},
     BoxedAny,
 };
 
 #[async_trait]
 pub trait Lifecycle: Send + Sync + Sized + 'static {
+    async fn on_init(&mut self) -> Result<(), PuppetError> {
+        tracing::debug!("Initializing puppet {}", type_name::<Self>());
+        Ok(())
+    }
     async fn on_start(&mut self) -> Result<(), PuppetError> {
         tracing::debug!("Starting puppet: {}", type_name::<Self>());
         Ok(())
@@ -64,6 +71,7 @@ where
     pub pid: Pid,
     pub state: P,
     pub(crate) status_tx: watch::Sender<LifecycleStatus>,
+    pub(crate) message_tx: Postman<P>,
     pub(crate) context: Arc<Mutex<HashMap<Id, BoxedAny>>>,
     pub(crate) post_office: PostOffice,
     pub(crate) supervision_config: SupervisionConfig,
@@ -169,7 +177,7 @@ where
         };
 
         // Clone the retry config from the supervision config.
-        let retry_config = self.supervision_config.retry.clone();
+        // let mut retry_config = self.supervision_config.retry;
 
         // Flag to store if the `on_start` function has been completed.
         let mut on_start_done = false;
@@ -191,7 +199,7 @@ where
                         self.set_status(LifecycleStatus::Active);
                     }
                     Err(PuppetError::Critical(_)) => {
-                        if retry_config.increment_retry().is_err() {
+                        if self.supervision_config.retry.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during start");
                             // If the maximum retry attempts are reached during `on_start`
@@ -202,7 +210,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            retry_config.maybe_wait().await;
+                            self.supervision_config.retry.maybe_wait().await;
                             continue;
                         }
                     }
@@ -219,7 +227,7 @@ where
                         start_all_puppets_done = true;
                     }
                     Err(PuppetError::Critical(_)) => {
-                        if retry_config.increment_retry().is_err() {
+                        if self.supervision_config.retry.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during start");
                             // If the maximum retry attempts are reached during `start_all_puppets`
@@ -230,7 +238,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            retry_config.maybe_wait().await;
+                            self.supervision_config.retry.maybe_wait().await;
                             continue;
                         }
                     }
@@ -280,7 +288,7 @@ where
             }
         };
         // Clone the retry config from the supervision config.
-        let retry_config = self.supervision_config.retry.clone();
+        // let retry_config = self.supervision_config.retry.clone();
 
         // Flag to store if the `on_stop` function has been completed.
         let mut on_stop_done = false;
@@ -296,7 +304,7 @@ where
                 match self.stop_all_puppets(&service_command).await {
                     Ok(_) | Err(PuppetError::NonCritical(_)) => stop_all_puppets_done = true,
                     Err(PuppetError::Critical(_)) => {
-                        if retry_config.increment_retry().is_err() {
+                        if self.supervision_config.retry.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `stop_all_puppets`,
@@ -307,7 +315,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            retry_config.maybe_wait().await;
+                            self.supervision_config.retry.maybe_wait().await;
                             continue;
                         }
                     }
@@ -323,7 +331,7 @@ where
                         self.set_status(LifecycleStatus::Inactive);
                     }
                     Err(PuppetError::Critical(_)) => {
-                        if retry_config.increment_retry().is_err() {
+                        if self.supervision_config.retry.increment_retry().is_err() {
                             let error =
                                 CriticalError::new(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `on_stop`,
@@ -334,7 +342,7 @@ where
                         } else {
                             // Increment the retry count, wait according to the retry config, and
                             // continue to the next iteration of the loop.
-                            retry_config.maybe_wait().await;
+                            self.supervision_config.retry.maybe_wait().await;
                             continue;
                         }
                     }
@@ -464,6 +472,7 @@ where
                 .get_service_postman_by_pid(master)
                 .clone()
                 .expect("Service postman not found");
+
             service_postman
                 .send(puppet, ServiceCommand::ReportFailure { puppet, error })
                 .await
@@ -477,10 +486,11 @@ where
             PuppetError::NonCritical(_) => {}
             PuppetError::Critical(_) => {
                 if let Err(err) = self
-                    .send_command_by_pid(puppet, ServiceCommand::Restart { stage: None })
+                    .supervision_config
+                    .handle_failure(&self.post_office, self.pid, puppet)
                     .await
                 {
-                    match PuppetError::from(err) {
+                    match err {
                         // Do nothing
                         PuppetError::NonCritical(_) => {}
                         PuppetError::Critical(err) => {
@@ -492,18 +502,6 @@ where
             }
         };
     }
-
-    //
-    // fn create<P: Puppet>(
-    //     &self,
-    //     puppet: impl Into<Puppeter<P>>,
-    // ) -> Result<PuppetAddress<P>, PuppeterSpawnError<P>>
-    // where
-    //     Self: Puppet,
-    // {
-    //     self.puppeter.spawn::<Self, P>(puppet)
-    // }
-    //
 
     pub async fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
     where
@@ -681,7 +679,7 @@ where
     E: Message,
 {
     type Response: Send + 'static;
-    // type Executor: Executor<Self, M> = SequentialExecutor;
+    type Executor: Executor<E> + Send + 'static = SequentialExecutor;
 
     async fn handle_message(&mut self, msg: E) -> Result<Self::Response, PuppetError>;
 }
@@ -745,8 +743,7 @@ mod tests {
                 &mut self,
                 msg: SleepMessage,
             ) -> Result<Self::Response, PuppetError> {
-                tracing::debug!("Sleeping: {:?}", msg);
-                println!("Sleeping: {:?}", msg);
+                println!("Sleeping: {:?}", self.state.i);
                 Err(CriticalError::new(self.pid, "foo").into())
             }
         }

@@ -3,27 +3,31 @@ use std::fmt;
 use tokio::sync::watch;
 
 use crate::{
-    errors::PostmanError,
+    errors::{PostmanError, PuppetError},
     message::{Message, Postman, ServiceCommand, ServicePostman},
     pid::Pid,
-    puppet::{Handler, Lifecycle, LifecycleStatus, Puppet, PuppetState, ResponseFor},
+    post_office::PostOffice,
+    puppet::{
+        Handler, Lifecycle, LifecycleStatus, Puppet, PuppetBuilder, PuppetState, ResponseFor,
+    },
 };
 
 #[derive(Debug, Clone)]
-pub struct Address<P>
+pub struct Address<S>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    S: PuppetState,
+    Puppet<S>: Lifecycle,
 {
     pub pid: Pid,
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
-    pub(crate) message_tx: Postman<P>,
+    pub(crate) message_tx: Postman<S>,
+    pub(crate) post_office: PostOffice,
 }
 
-impl<P> Address<P>
+impl<S> Address<S>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    S: PuppetState,
+    Puppet<S>: Lifecycle,
 {
     pub fn get_status(&self) -> LifecycleStatus {
         *self.status_rx.borrow()
@@ -47,15 +51,15 @@ where
 
     pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
-        Puppet<P>: Handler<E>,
+        Puppet<S>: Handler<E>,
         E: Message + 'static,
     {
         self.message_tx.send::<E>(message).await
     }
 
-    pub async fn ask<E>(&self, message: E) -> Result<ResponseFor<P, E>, PostmanError>
+    pub async fn ask<E>(&self, message: E) -> Result<ResponseFor<S, E>, PostmanError>
     where
-        Puppet<P>: Handler<E>,
+        Puppet<S>: Handler<E>,
         E: Message + 'static,
     {
         self.message_tx
@@ -67,14 +71,25 @@ where
         &self,
         message: E,
         duration: std::time::Duration,
-    ) -> Result<ResponseFor<P, E>, PostmanError>
+    ) -> Result<ResponseFor<S, E>, PostmanError>
     where
-        Puppet<P>: Handler<E>,
+        Puppet<S>: Handler<E>,
         E: Message + 'static,
     {
         self.message_tx
             .send_and_await_response::<E>(message, Some(duration))
             .await
+    }
+
+    pub async fn spawn<P>(
+        &self,
+        builder: impl Into<PuppetBuilder<P>>,
+    ) -> Result<Address<P>, PuppetError>
+    where
+        P: PuppetState,
+        Puppet<P>: Lifecycle,
+    {
+        self.post_office.spawn::<S, P>(builder).await
     }
 }
 

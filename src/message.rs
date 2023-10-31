@@ -5,6 +5,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     errors::{PostmanError, PuppetError},
+    executor::Executor,
     pid::Pid,
     puppet::{Handler, Lifecycle, Puppet, PuppetState, ResponseFor},
 };
@@ -70,22 +71,7 @@ where
     async fn handle_message(&mut self, puppet: &mut Puppet<P>) {
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
-        // TODO: Executors
-        let response = puppet.handle_message(msg).await;
-        if let Err(err) = &response {
-            match err {
-                // Do nothing
-                PuppetError::NonCritical(_) => {}
-                PuppetError::Critical(_) => {
-                    puppet.report_failure(err.clone()).await;
-                }
-            }
-        }
-        if let Some(reply_address) = reply_address {
-            if let Err(err) = reply_address.send(response) {
-                // println!("Error sending reply {:?}", err);
-            }
-        }
+        <Puppet<P> as Handler<E>>::Executor::execute(puppet, msg, reply_address).await;
     }
     async fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {

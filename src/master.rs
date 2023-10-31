@@ -12,57 +12,6 @@ use crate::{
     },
 };
 
-pub(crate) fn create_puppet_entities<M, P>(
-    master: &Puppet<M>,
-    builder: &mut PuppetBuilder<P>,
-) -> (
-    Puppet<P>,
-    PuppetHandle<P>,
-    Postman<P>,
-    ServicePostman,
-    Address<P>,
-)
-where
-    M: PuppetState,
-    Puppet<M>: Lifecycle,
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
-{
-    let pid = Pid::new::<P>();
-    let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
-    let (tx, rx) = mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_bufer_size.into());
-    let (command_tx, command_rx) =
-        mpsc::channel::<ServicePacket>(builder.commands_bufer_size.into());
-    let supervision_config = builder.supervision_config.take().unwrap();
-
-    let puppet = Puppet {
-        pid,
-        state: builder.state.clone(),
-        status_tx,
-        context: master.context.clone(),
-        post_office: master.post_office.clone(),
-        supervision_config,
-    };
-
-    let handler = PuppetHandle {
-        pid,
-        status_rx: status_rx.clone(),
-        message_rx: Mailbox::new(rx),
-        command_rx: ServiceMailbox::new(command_rx),
-    };
-
-    let postman = Postman::new(tx);
-
-    let address = Address {
-        pid,
-        status_rx,
-        message_tx: postman.clone(),
-    };
-
-    let service_postman = ServicePostman::new(command_tx);
-    (puppet, handler, postman, service_postman, address)
-}
-
 pub(crate) async fn run_puppet_loop<P>(mut puppet: Puppet<P>, mut handle: PuppetHandle<P>)
 where
     P: PuppetState,

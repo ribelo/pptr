@@ -29,9 +29,15 @@ impl PuppetDoesNotExistError {
     }
 }
 
+impl From<PuppetDoesNotExistError> for CriticalError {
+    fn from(value: PuppetDoesNotExistError) -> Self {
+        CriticalError::new(value.puppet, value.to_string())
+    }
+}
+
 impl From<PuppetDoesNotExistError> for PuppetError {
     fn from(value: PuppetDoesNotExistError) -> Self {
-        CriticalError::new(value.puppet, value.to_string()).into()
+        CriticalError::from(value).into()
     }
 }
 
@@ -108,9 +114,15 @@ impl PermissionDeniedError {
     }
 }
 
+impl From<PermissionDeniedError> for CriticalError {
+    fn from(value: PermissionDeniedError) -> Self {
+        CriticalError::new(value.puppet, value.to_string())
+    }
+}
+
 impl From<PermissionDeniedError> for PuppetError {
     fn from(value: PermissionDeniedError) -> Self {
-        CriticalError::new(value.puppet, value.to_string()).into()
+        CriticalError::from(value).into()
     }
 }
 
