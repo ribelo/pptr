@@ -1,13 +1,13 @@
-use std::{any::Any, fmt, marker::PhantomData};
+use std::{fmt, marker::PhantomData};
 
 use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    errors::{PostmanError, PuppetError},
+    errors::{CriticalError, PostmanError, PuppetError},
     executor::Executor,
     pid::Pid,
-    puppet::{Handler, Lifecycle, Puppet, PuppetState, ResponseFor},
+    puppet::{Handler, Lifecycle, Puppeter, ResponseFor},
 };
 
 pub trait Message: fmt::Debug + Send + 'static {}
@@ -15,10 +15,9 @@ pub trait Message: fmt::Debug + Send + 'static {}
 #[async_trait]
 pub trait Envelope<P>: Send
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
-    async fn handle_message(&mut self, puppet: &mut Puppet<P>);
+    async fn handle_message(&mut self, puppet: &mut P, puppeter: &mut Puppeter);
     async fn reply_error(&mut self, err: PuppetError);
 }
 
@@ -27,8 +26,7 @@ pub type ReplyReceiver<T> = oneshot::Receiver<Result<T, PuppetError>>;
 
 pub struct Packet<P, E>
 where
-    P: PuppetState,
-    Puppet<P>: Handler<E>,
+    P: Handler<E>,
     E: Message,
 {
     message: Option<E>,
@@ -38,8 +36,7 @@ where
 
 impl<P, E> Packet<P, E>
 where
-    P: PuppetState,
-    Puppet<P>: Handler<E>,
+    P: Handler<E>,
     E: Message,
 {
     pub fn without_reply(message: E) -> Self {
@@ -64,14 +61,13 @@ where
 #[async_trait]
 impl<P, E> Envelope<P> for Packet<P, E>
 where
-    P: PuppetState,
-    Puppet<P>: Handler<E>,
+    P: Handler<E>,
     E: Message + 'static,
 {
-    async fn handle_message(&mut self, puppet: &mut Puppet<P>) {
+    async fn handle_message(&mut self, puppet: &mut P, puppeter: &mut Puppeter) {
         let msg = self.message.take().unwrap();
         let reply_address = self.reply_address.take();
-        <Puppet<P> as Handler<E>>::Executor::execute(puppet, msg, reply_address).await;
+        <P as Handler<E>>::Executor::execute(puppet, puppeter, msg, reply_address).await;
     }
     async fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
@@ -103,27 +99,34 @@ impl ServicePacket {
         }
     }
 
-    pub(crate) async fn handle_command<P>(&mut self, puppet: &mut Puppet<P>)
+    pub(crate) async fn handle_command<P>(&mut self, puppet: &mut P, puppeter: &mut Puppeter)
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         let cmd = self.cmd.take().unwrap();
         let reply_address = self.reply_address.take();
-        let response = puppet.handle_command(cmd).await;
+        let response = puppeter.handle_command(puppet, cmd).await;
         if let Err(err) = &response {
             match err {
                 // Do nothing
                 PuppetError::NonCritical(_) => {}
                 PuppetError::Critical(_) => {
-                    puppet.report_failure(err.clone()).await;
+                    puppeter.report_failure(puppet, err.clone()).await;
                 }
             }
         }
         if let Some(reply_address) = reply_address {
-            if let Err(err) = reply_address.send(response) {
-                // TODO:
-                // println!("Error sending reply {:?}", err);
+            if reply_address.send(response).is_err() {
+                puppeter
+                    .report_failure(
+                        puppet,
+                        CriticalError::new(
+                            puppeter.pid,
+                            "Failed to send response over the oneshot channel",
+                        )
+                        .into(),
+                    )
+                    .await;
             }
         }
     }
@@ -145,7 +148,7 @@ pub enum ServiceCommand {
     Start,
     Stop,
     Restart { stage: Option<RestartStage> },
-    ReportFailure { puppet: Pid, error: PuppetError },
+    ReportFailure { pid: Pid, error: PuppetError },
     Fail,
 }
 
@@ -154,16 +157,14 @@ impl Message for ServiceCommand {}
 #[derive(Debug)]
 pub struct Postman<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>,
 }
 
 impl<P> Clone for Postman<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     fn clone(&self) -> Self {
         Self {
@@ -174,8 +175,7 @@ where
 
 impl<P> Postman<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     pub fn new(tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>) -> Self {
         Self { tx }
@@ -184,7 +184,7 @@ where
     #[inline(always)]
     pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
-        Puppet<P>: Handler<E>,
+        P: Handler<E>,
         E: Message + 'static,
     {
         let packet = Packet::<P, E>::without_reply(message);
@@ -203,7 +203,7 @@ where
         duration: Option<std::time::Duration>,
     ) -> Result<ResponseFor<P, E>, PostmanError>
     where
-        Puppet<P>: Handler<E>,
+        P: Handler<E>,
         E: Message + 'static,
     {
         let (res_tx, res_rx) =
@@ -220,7 +220,7 @@ where
             match tokio::time::timeout(duration, res_rx).await {
                 Ok(inner_res) => {
                     match inner_res {
-                        Ok(res) => res.map_err(|e| PostmanError::from(e)),
+                        Ok(res) => res.map_err(PostmanError::from),
                         Err(_) => {
                             Err(PostmanError::ResponseReceiveError {
                                 puppet: Pid::new::<P>(),
@@ -236,7 +236,7 @@ where
             }
         } else {
             match res_rx.await {
-                Ok(res) => res.map_err(|e| PostmanError::from(e)),
+                Ok(res) => res.map_err(PostmanError::from),
                 Err(_) => {
                     Err(PostmanError::ResponseReceiveError {
                         puppet: Pid::new::<P>(),
@@ -299,16 +299,14 @@ impl ServicePostman {
 
 pub(crate) struct Mailbox<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     rx: mpsc::Receiver<Box<dyn Envelope<P>>>,
 }
 
 impl<P> fmt::Debug for Mailbox<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Mailbox").field("rx", &self.rx).finish()
@@ -317,8 +315,7 @@ where
 
 impl<P> Mailbox<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     pub fn new(rx: mpsc::Receiver<Box<dyn Envelope<P>>>) -> Self {
         Self { rx }

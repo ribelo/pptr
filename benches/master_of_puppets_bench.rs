@@ -1,6 +1,12 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, Criterion};
-use praxis::{message::Message, puppet::{Puppet, Lifecycle, Handler},
+use master_of_puppets::{
+    errors::PuppetError,
+    executor::{ConcurrentExecutor, SequentialExecutor},
+    master_of_puppets::MasterOfPuppets,
+    message::Message,
+    puppet::{Handler, Lifecycle, PuppetBuilder, Puppeter},
+    supervision::strategy::OneForAll,
 };
 
 #[derive(Clone, Debug)]
@@ -13,16 +19,18 @@ struct PingActor {
     count: usize,
 }
 
-type Foo = Puppet<PingActor>;
-
-impl Lifecycle for Foo {}
+impl Lifecycle for PingActor {
+    type Supervision = OneForAll;
+}
 
 #[derive(Clone, Default)]
 struct ConcurrentPingActor {
     count: usize,
 }
 
-impl Lifecycle for ConcurrentPingActor {}
+impl Lifecycle for ConcurrentPingActor {
+    type Supervision = OneForAll;
+}
 
 #[derive(Clone, Default)]
 struct ParallelPingActor {
@@ -32,11 +40,15 @@ struct ParallelPingActor {
 // impl Lifecycle for ParallelPingActor {}
 
 #[async_trait]
-impl Handler<PingMessage> for Puppet<PingActor> {
+impl Handler<PingMessage> for PingActor {
     type Response = usize;
     type Executor = SequentialExecutor;
-    async fn handle_message(&mut self, msg: PingMessage) -> Result<usize,
-PuppetError> {         self.count += msg.0;
+    async fn handle_message(
+        &mut self,
+        msg: PingMessage,
+        puppeter: &Puppeter,
+    ) -> Result<usize, PuppetError> {
+        self.count += msg.0;
         Ok(self.count)
     }
 }
@@ -44,78 +56,86 @@ PuppetError> {         self.count += msg.0;
 #[async_trait]
 impl Handler<PingMessage> for ConcurrentPingActor {
     type Response = usize;
-    type Exec = execution::Concurrent;
-    async fn handle_message(&mut self, msg: PingMessage) -> Result<usize,
-PuppetError> {         self.count += msg.0;
+    type Executor = ConcurrentExecutor;
+    async fn handle_message(
+        &mut self,
+        msg: PingMessage,
+        puppeter: &Puppeter,
+    ) -> Result<usize, PuppetError> {
+        self.count += msg.0;
         Ok(self.count)
     }
 }
 
-#[cfg(feature = "rayon")]
-#[async_trait]
-impl Handler<PingMessage> for ParallelPingActor {
-    type Response = usize;
-    type Exec = execution::Parallel;
-    async fn handle_message(&mut self, msg: PingMessage) -> Result<usize,
-PuppetError> {         self.count += msg.0;
-        Ok(self.count)
-    }
-}
+// #[cfg(feature = "rayon")]
+// #[async_trait]
+// impl Handler<PingMessage> for ParallelPingActor {
+//     type Response = usize;
+//     type Exec = execution::Parallel;
+//     async fn handle_message(&mut self, msg: PingMessage) -> Result<usize,
+// PuppetError> {         self.count += msg.0;
+//         Ok(self.count)
+//     }
+// }
 
 fn benchmarks(c: &mut Criterion) {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     c.bench_function("minion send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let puppeter = Puppeter::new();
-                let actor = PingActor { count: 10 };
-                let _address = actor.spawn().unwrap();
+                let post_office = MasterOfPuppets::new();
+                let actor =
+                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+
+                let _address = actor.spawn().await.unwrap();
                 for i in 0..100_000 {
-                    puppeter
+                    post_office
                         .send::<PingActor, _>(PingMessage(10))
                         .await
                         .unwrap();
                 }
-                puppeter.kill_puppet::<Puppeter, PingActor>().await.unwrap();
             })
         })
     });
     c.bench_function("minion address send ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let puppeter = Puppeter::new();
-                let actor = PingActor { count: 10 };
-                let address = actor.spawn().unwrap();
+                let post_office = MasterOfPuppets::new();
+                let actor =
+                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+                let address = actor.spawn().await.unwrap();
                 for _ in 0..100_000 {
                     address.send(PingMessage(10)).await.unwrap();
                 }
-                puppeter.kill_puppet::<Puppeter, PingActor>().await.unwrap();
             })
         })
     });
     c.bench_function("minion ask ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let puppeter = Puppeter::new();
-                let actor = PingActor { count: 10 };
-                let _address = actor.spawn().unwrap();
+                let post_office = MasterOfPuppets::new();
+                let actor =
+                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+                let address = actor.spawn().await.unwrap();
                 for _ in 0..100_000 {
-                    puppeter.ask::<PingActor,
-_>(PingMessage(10)).await.unwrap();                 }
-                puppeter.kill_puppet::<Puppeter, PingActor>().await.unwrap();
+                    post_office
+                        .ask::<PingActor, _>(PingMessage(10))
+                        .await
+                        .unwrap();
+                }
             })
         })
     });
     c.bench_function("minion address ask ping 1e5", |b| {
         b.iter(|| {
             runtime.block_on(async {
-                let puppeter = Puppeter::new();
-                let actor = PingActor { count: 10 };
-                let address = actor.spawn().unwrap();
+                let post_office = MasterOfPuppets::new();
+                let actor =
+                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+                let address = actor.spawn().await.unwrap();
                 for _ in 0..100_000 {
                     address.ask(PingMessage(10)).await.unwrap();
                 }
-                puppeter.kill_puppet::<Puppeter, PingActor>().await.unwrap();
             })
         })
     });
@@ -123,8 +143,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ConcurrentPingActor { count:
-10     // });             let _address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ConcurrentPingActor { count 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 gru.send::<ConcurrentPingActor, _>(PingMessage(10))
     //                     .await
@@ -138,8 +157,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ConcurrentPingActor { count:
-10     // });             let address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ConcurrentPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 address.send(PingMessage(10)).await.unwrap();
     //             }
@@ -151,8 +169,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ConcurrentPingActor { count:
-10     // });             let _address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ConcurrentPingActor { count: 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = gru.ask::<ConcurrentPingActor,
     // _>(PingMessage(10)).await;             }
@@ -164,8 +181,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ConcurrentPingActor { count:
-10     // });             let address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ConcurrentPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = address.ask(PingMessage(10)).await;
     //             }
@@ -178,8 +194,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ParallelPingActor { count:
-10     // });             let _address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 gru.send::<ParallelPingActor, _>(PingMessage(10))
     //                     .await
@@ -194,8 +209,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ParallelPingActor { count:
-10     // });             let address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 address.send(PingMessage(10)).await.unwrap();
     //             }
@@ -208,8 +222,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ParallelPingActor { count:
-10     // });             let _address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = gru.ask::<ParallelPingActor,
     // _>(PingMessage(10)).await;             }
@@ -222,8 +235,7 @@ _>(PingMessage(10)).await.unwrap();                 }
     //     b.iter(|| {
     //         runtime.block_on(async {
     //             let gru = Puppeter::new();
-    //             let actor = PuppetStruct::new(ParallelPingActor { count:
-10     // });             let address = gru.spawn(actor).unwrap();
+    //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = address.ask(PingMessage(10)).await;
     //             }

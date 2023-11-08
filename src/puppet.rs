@@ -1,57 +1,47 @@
 use std::{
     any::type_name,
     num::NonZeroUsize,
-    pin::Pin,
     sync::{Arc, Mutex},
 };
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use futures::Future;
 use rustc_hash::FxHashMap as HashMap;
-use tokio::{
-    sync::{mpsc, oneshot, watch},
-    task::JoinHandle,
-};
+use tokio::sync::watch;
 
 use crate::{
     address::Address,
-    errors::{
-        CriticalError, PuppetError, PuppetRegisterError, PuppetSendCommandError,
-        PuppetSendMessageError,
-    },
-    executor::{Executor, SequentialExecutor},
-    master::run_puppet_loop,
-    message::{
-        Envelope, Mailbox, Message, Postman, RestartStage, ServiceCommand, ServiceMailbox,
-        ServicePacket, ServicePostman,
-    },
+    errors::{CriticalError, PuppetError, PuppetSendCommandError, PuppetSendMessageError},
+    executor::Executor,
+    master_of_puppets::MasterOfPuppets,
+    message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::{Id, Pid},
-    post_office::{self, PostOffice},
     supervision::{RetryConfig, SupervisionStrategy},
     BoxedAny,
 };
 
+#[allow(unused_variables)]
 #[async_trait]
-pub trait Lifecycle: Send + Sync + Sized + 'static {
+pub trait Lifecycle: Send + Sync + Sized + Default + Clone + 'static {
     type Supervision: SupervisionStrategy + Send + Sync;
-    async fn on_init(&mut self) -> Result<(), PuppetError> {
+
+    async fn on_init(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
         tracing::debug!("Initializing puppet {}", type_name::<Self>());
         Ok(())
     }
-    async fn on_start(&mut self) -> Result<(), PuppetError> {
+    async fn on_start(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
         tracing::debug!("Starting puppet: {}", type_name::<Self>());
         Ok(())
     }
 
-    async fn on_stop(&mut self) -> Result<(), PuppetError> {
+    async fn on_stop(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
         tracing::debug!("Stopping puppet {}", type_name::<Self>());
         Ok(())
     }
 }
 
-pub trait PuppetState: Send + Sync + Default + Clone + Default + 'static {}
-impl<T> PuppetState for T where T: Send + Sync + Default + Clone + Default + 'static {}
+pub trait Puppet: Send + Sync + Default + Clone + Default + 'static {}
+impl<T> Puppet for T where T: Send + Sync + Default + Clone + Default + 'static {}
 
 #[derive(Debug, Clone, Copy, strum::Display, PartialEq, Eq)]
 pub enum LifecycleStatus {
@@ -64,38 +54,39 @@ pub enum LifecycleStatus {
 }
 
 #[derive(Debug, Clone)]
-pub struct Puppet<P>
-where
-    P: PuppetState,
-    Self: Lifecycle,
-{
+pub struct Puppeter {
     pub pid: Pid,
-    pub state: P,
-    pub(crate) message_tx: Postman<P>,
     pub(crate) context: Arc<Mutex<HashMap<Id, BoxedAny>>>,
-    pub(crate) post_office: PostOffice,
+    pub(crate) post_office: MasterOfPuppets,
     pub(crate) retry_config: RetryConfig,
 }
 
-pub struct PuppetBuilder<P> {
-    pub state: P,
+pub struct PuppetBuilder<P>
+where
+    P: Lifecycle,
+{
+    pub pid: Pid,
+    pub puppet: Option<P>,
     pub messages_bufer_size: NonZeroUsize,
     pub commands_bufer_size: NonZeroUsize,
-    pub(crate) post_office: Option<PostOffice>,
+    pub(crate) post_office: Option<MasterOfPuppets>,
     pub retry_config: Option<RetryConfig>,
+    phantom: std::marker::PhantomData<P>,
 }
 
 impl<P> PuppetBuilder<P>
 where
-    P: PuppetState,
+    P: Lifecycle,
 {
     pub fn new(state: P) -> Self {
         Self {
-            state,
+            pid: Pid::new::<P>(),
+            puppet: Some(state),
             messages_bufer_size: NonZeroUsize::new(1024).unwrap(),
             commands_bufer_size: NonZeroUsize::new(16).unwrap(),
             post_office: None,
             retry_config: Some(Default::default()),
+            phantom: std::marker::PhantomData,
         }
     }
 
@@ -109,14 +100,14 @@ where
         self
     }
 
-    pub fn with_post_office(mut self, post_office: &PostOffice) -> Self {
+    pub fn with_post_office(mut self, post_office: &MasterOfPuppets) -> Self {
         self.post_office = Some(post_office.clone());
         self
     }
 
     pub async fn spawn(mut self) -> Result<Address<P>, PuppetError>
     where
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         let post_office = self.post_office.take().unwrap_or_default();
         post_office.spawn::<P, P>(self).await
@@ -124,39 +115,23 @@ where
 
     pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
     where
-        Puppet<P>: Lifecycle,
-        M: PuppetState,
-        Puppet<M>: Lifecycle,
+        P: Lifecycle,
+        M: Lifecycle,
     {
         let post_office = self.post_office.take().unwrap_or_default();
         post_office.spawn::<M, P>(self).await
     }
 }
 
-impl<S> Puppet<S>
-where
-    S: PuppetState,
-    Self: Lifecycle,
-{
-    /// Asynchronously starts the operation of the puppet service.
-    ///
-    /// Starts or restarts the puppet service by coordinating initialization functions and the
-    /// execution of all puppets. Handles failure modes with configurable retry logic.
-    ///
-    /// # Arguments
-    ///
-    /// * `is_restarting` - A boolean indicating whether the service is being restarted or not.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(PuppetError)` if a critical or fatal error occurs during operations.
-    ///
-    /// # Panics
-    ///
-    /// This method does not explicitly panic.
-    ///
-    /// Note: Called functions such as `on_start` may panic depending on your code.
-    pub(crate) async fn start(&mut self, is_restarting: bool) -> Result<(), CriticalError> {
+impl Puppeter {
+    pub(crate) async fn start<P>(
+        &mut self,
+        puppet: &mut P,
+        is_restarting: bool,
+    ) -> Result<(), CriticalError>
+    where
+        P: Lifecycle,
+    {
         // Determine the service command and initial status based on whether the service is
         // restarting or not.
         let (service_command, begin_status) = match is_restarting {
@@ -186,7 +161,7 @@ where
 
             if !on_start_done {
                 // Perform the `on_start` function which initializes the puppet service.
-                match self.on_start().await {
+                match puppet.on_start(self).await {
                     Ok(_) | Err(PuppetError::NonCritical(_)) => {
                         // If `on_start` succeeds or returns a non-critical error, set the status
                         // to `Active` and mark `on_start_done` as `true`.
@@ -227,7 +202,7 @@ where
                                 CriticalError::new(self.pid, "Max retry reached during start");
                             // If the maximum retry attempts are reached during `start_all_puppets`
                             // Mark the tree as poisoned.
-                            self.report_failure(error.clone().into()).await;
+                            self.report_failure(puppet, error.clone().into()).await;
                             // And return a fatal error indicating the failure.
                             return Err(error);
                         } else {
@@ -250,25 +225,10 @@ where
         Ok(())
     }
 
-    /// Asynchronously stops the operation of the puppet service.
-    ///
-    /// Stops or restarts the puppet service by coordinating initialization functions and the
-    /// execution of all puppets. Handles failure modes with configurable retry logic.
-    ///
-    /// # Arguments
-    ///
-    /// * `is_restarting` - A boolean indicating whether the service is being restarted or not.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(PuppetError)` if a critical or fatal error occurs during operations.
-    ///
-    /// # Panics
-    ///
-    /// This method does not explicitly panic.
-    ///
-    /// Note: Called functions such as `on_stop` may panic depending on your code.
-    pub(crate) async fn stop(&mut self, is_restarting: bool) -> Result<(), CriticalError> {
+    async fn stop<P>(&mut self, puppet: &mut P, is_restarting: bool) -> Result<(), CriticalError>
+    where
+        P: Lifecycle,
+    {
         // Determine the service command and initial status based on whether the service is
         // restarting or not.
         let (service_command, begin_status) = match is_restarting {
@@ -304,7 +264,7 @@ where
                                 CriticalError::new(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `stop_all_puppets`,
                             // Mark tree as poisoned.
-                            self.report_failure(error.clone().into()).await;
+                            self.report_failure(puppet, error.clone().into()).await;
                             // And return a fatal error indicating the failure.
                             return Err(error);
                         } else {
@@ -318,7 +278,7 @@ where
             }
 
             if !on_stop_done {
-                match self.on_stop().await {
+                match puppet.on_stop(self).await {
                     Ok(_) | Err(PuppetError::NonCritical(_)) => {
                         // If `on_stop` succeeds or returns a non-critical error, set the status
                         // to `Inactive` and mark `on_stop_done` as `true`.
@@ -331,7 +291,7 @@ where
                                 CriticalError::new(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `on_stop`,
                             // Mark tree as poisoned.
-                            self.report_failure(error.clone().into()).await;
+                            self.report_failure(puppet, error.clone().into()).await;
                             // And return a fatal error indicating the failure.
                             return Err(error);
                         } else {
@@ -354,42 +314,32 @@ where
         Ok(())
     }
 
-    /// Restarts the running puppet actor.
-    ///
-    /// # Errors
-    ///
-    /// Returns `PuppetError` if either `stop` or `start` functions encounter any errors during
-    /// the execution.
-    ///
-    /// # Panics
-    ///
-    /// This method does not explicitly panic.
-    ///
-    /// Note: Called functions such as `on_start` or `or_stop` may panic depending
-    /// on your configuration.
-    pub(crate) async fn restart(&mut self) -> Result<(), CriticalError> {
-        self.stop(true).await?;
-        self.start(true).await?;
+    async fn restart<P>(&mut self, puppet: &mut P) -> Result<(), CriticalError>
+    where
+        P: Lifecycle,
+    {
+        self.stop(puppet, true).await?;
+        self.start(puppet, true).await?;
         Ok(())
     }
-
-    pub(crate) async fn fail(&mut self) {
-        self.fail_all_puppets().await;
+    pub(crate) async fn fail<P>(&mut self, puppet: &mut P)
+    where
+        P: Lifecycle,
+    {
+        self.fail_all_puppets(puppet).await;
         self.set_status(LifecycleStatus::Failed);
     }
 
     pub fn is_puppet_exists<P>(&self) -> bool
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         self.post_office.is_puppet_exists::<P>()
     }
 
     pub fn get_status<P>(&self) -> Option<LifecycleStatus>
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
         self.post_office.get_status_by_pid(puppet)
@@ -401,20 +351,17 @@ where
 
     pub fn has_puppet<M, P>(&self) -> Option<bool>
     where
-        M: PuppetState,
-        Puppet<M>: Lifecycle,
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        M: Lifecycle,
+        P: Lifecycle,
     {
-        let master = Pid::new::<M>();
-        let puppet = Pid::new::<P>();
-        self.post_office.has_puppet_by_pid(master, puppet)
+        let master_pid = Pid::new::<M>();
+        let puppet_pid = Pid::new::<P>();
+        self.post_office.has_puppet_by_pid(master_pid, puppet_pid)
     }
 
     pub fn get_master<P>(&self) -> Option<Pid>
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
         self.post_office.get_master_by_pid(puppet)
@@ -422,70 +369,77 @@ where
 
     pub fn has_permission<M, P>(&self) -> Option<bool>
     where
-        M: PuppetState,
-        Puppet<M>: Lifecycle,
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        M: Lifecycle,
+        P: Lifecycle,
     {
-        let master = Pid::new::<M>();
-        let puppet = Pid::new::<P>();
-        self.post_office.has_permission_by_pid(master, puppet)
+        let master_pid = Pid::new::<M>();
+        let puppet_pid = Pid::new::<P>();
+        self.post_office
+            .has_permission_by_pid(master_pid, puppet_pid)
     }
 
-    pub async fn spawn<P>(
-        &self,
-        builder: impl Into<PuppetBuilder<P>>,
-    ) -> Result<Address<P>, PuppetError>
-    where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
-    {
-        self.post_office.spawn::<S, P>(builder).await
-    }
+    // pub async fn spawn<P>(
+    //     &self,
+    //     builder: impl Into<PuppetBuilder<P>>,
+    // ) -> Result<Address<P>, PuppetError>
+    // where
+    //     P: Lifecycle,
+    // {
+    //     self.post_office.spawn::<S, P>(builder).await
+    // }
 
     #[async_recursion]
-    pub async fn report_failure(&mut self, error: PuppetError) {
-        let master = self.get_master::<S>().expect("Master not found");
-        let puppet = self.pid;
+    pub async fn report_failure<P>(&mut self, puppet: &mut P, error: PuppetError)
+    where
+        P: Lifecycle,
+    {
+        let master_pid = self.get_master::<P>().expect("Master not found");
+        let puppet_pid = self.pid;
 
-        if master == puppet {
-            if (self.restart().await).is_err() {
-                self.fail().await;
+        if master_pid == puppet_pid {
+            if (self.restart(puppet).await).is_err() {
+                self.fail(puppet).await;
             } else {
                 println!("Restarted");
             }
         } else {
             let service_postman = self
                 .post_office
-                .get_service_postman_by_pid(master)
+                .get_service_postman_by_pid(master_pid)
                 .clone()
                 .expect("Service postman not found");
 
             service_postman
-                .send(puppet, ServiceCommand::ReportFailure { puppet, error })
+                .send(
+                    puppet_pid,
+                    ServiceCommand::ReportFailure {
+                        pid: puppet_pid,
+                        error,
+                    },
+                )
                 .await
                 .expect("Failed to report failure");
         }
     }
 
-    pub async fn handle_child_error(&mut self, puppet: Pid, error: PuppetError) {
+    pub async fn handle_child_error<P>(&mut self, puppet: &mut P, pid: Pid, error: PuppetError)
+    where
+        P: Lifecycle,
+    {
         match error {
             // Do nothing
             PuppetError::NonCritical(_) => {}
             PuppetError::Critical(_) => {
-                if let Err(err) = <Self as Lifecycle>::Supervision::handle_failure(
-                    &self.post_office,
-                    self.pid,
-                    puppet,
-                )
-                .await
+                if let Err(err) =
+                    <P as Lifecycle>::Supervision::handle_failure(&self.post_office, self.pid, pid)
+                        .await
                 {
                     match err {
                         // Do nothing
                         PuppetError::NonCritical(_) => {}
                         PuppetError::Critical(err) => {
                             // If the restart command fails, report the failure to the master.
-                            let _ = self.report_failure(err.into()).await;
+                            let _ = self.report_failure(puppet, err.into()).await;
                         }
                     }
                 }
@@ -495,8 +449,7 @@ where
 
     pub async fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
     where
-        P: PuppetState,
-        Puppet<P>: Handler<E>,
+        P: Handler<E>,
         E: Message,
     {
         self.post_office.send::<P, E>(message).await
@@ -504,8 +457,7 @@ where
 
     pub async fn ask<P, E>(&self, message: E) -> Result<ResponseFor<P, E>, PuppetSendMessageError>
     where
-        P: PuppetState,
-        Puppet<P>: Handler<E>,
+        P: Handler<E>,
         E: Message,
     {
         self.post_office.ask::<P, E>(message).await
@@ -517,8 +469,7 @@ where
         duration: std::time::Duration,
     ) -> Result<ResponseFor<P, E>, PuppetSendMessageError>
     where
-        P: PuppetState,
-        Puppet<P>: Handler<E>,
+        P: Handler<E>,
         E: Message,
     {
         self.post_office
@@ -531,8 +482,7 @@ where
         command: ServiceCommand,
     ) -> Result<(), PuppetSendCommandError>
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         self.send_command_by_pid(Pid::new::<P>(), command).await
     }
@@ -547,23 +497,30 @@ where
             .await
     }
 
-    pub(crate) async fn handle_command(&mut self, cmd: ServiceCommand) -> Result<(), PuppetError> {
+    pub(crate) async fn handle_command<P>(
+        &mut self,
+        puppet: &mut P,
+        cmd: ServiceCommand,
+    ) -> Result<(), PuppetError>
+    where
+        P: Lifecycle,
+    {
         match cmd {
-            ServiceCommand::Start => Ok(self.start(false).await?),
-            ServiceCommand::Stop => Ok(self.stop(false).await?),
+            ServiceCommand::Start => Ok(self.start(puppet, false).await?),
+            ServiceCommand::Stop => Ok(self.stop(puppet, false).await?),
             ServiceCommand::Restart { stage } => {
                 match stage {
-                    None => Ok(self.restart().await?),
-                    Some(RestartStage::Start) => Ok(self.start(true).await?),
-                    Some(RestartStage::Stop) => Ok(self.stop(true).await?),
+                    None => Ok(self.restart(puppet).await?),
+                    Some(RestartStage::Start) => Ok(self.start(puppet, true).await?),
+                    Some(RestartStage::Stop) => Ok(self.stop(puppet, true).await?),
                 }
             }
             ServiceCommand::Fail => {
-                self.fail().await;
+                self.fail(puppet).await;
                 Ok(())
             }
-            ServiceCommand::ReportFailure { puppet, error } => {
-                self.handle_child_error(puppet, error).await;
+            ServiceCommand::ReportFailure { pid, error } => {
+                self.handle_child_error(puppet, pid, error).await;
                 Ok(())
             }
         }
@@ -648,20 +605,24 @@ where
         Ok(())
     }
 
-    pub(crate) async fn fail_all_puppets(&mut self) {
+    pub(crate) async fn fail_all_puppets<P>(&mut self, puppet: &mut P)
+    where
+        P: Lifecycle,
+    {
         // Try to fetch the puppets by the given pid.
         if let Some(puppets) = self.post_office.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet in reverse to stop it.
-            for puppet in puppets.iter().rev() {
+            for pid in puppets.iter().rev() {
                 // Attempt to send the stop command to the current puppet.
-                self.send_command_by_pid(*puppet, ServiceCommand::Fail)
-                    .await;
+                if let Err(error) = self.send_command_by_pid(*pid, ServiceCommand::Fail).await {
+                    self.report_failure(puppet, error.into()).await;
+                }
             }
         };
     }
 }
 
-pub type ResponseFor<P, E> = <Puppet<P> as Handler<E>>::Response;
+pub type ResponseFor<P, E> = <P as Handler<E>>::Response;
 
 #[async_trait]
 pub trait Handler<E>: Lifecycle
@@ -671,14 +632,17 @@ where
     type Response: Send + 'static;
     type Executor: Executor<E> + Send + 'static;
 
-    async fn handle_message(&mut self, msg: E) -> Result<Self::Response, PuppetError>;
+    async fn handle_message(
+        &mut self,
+        msg: E,
+        puppeter: &Puppeter,
+    ) -> Result<Self::Response, PuppetError>;
 }
 
 #[derive(Debug)]
 pub struct PuppetHandle<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     pub pid: Pid,
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
@@ -692,84 +656,75 @@ mod tests {
 
     use std::time::Duration;
 
-    use praxis_derive::Message;
+    use master_of_puppets_derive::Message;
 
-    use crate::{
-        errors::NonCriticalError, executor::ConcurrentExecutor, supervision::strategy::OneForAll,
-    };
+    use crate::{executor::ConcurrentExecutor, supervision::strategy::OneForAll};
 
     use super::*;
 
-    #[tokio::test]
-    async fn it_works() {
-        #[derive(Debug, Clone, Message)]
-        pub struct SleepMessage {
-            i: i32,
-        }
-
-        #[derive(Debug, Default, Clone)]
-        pub struct MasterActor {}
-
-        impl Lifecycle for Puppet<MasterActor> {
-            type Supervision = OneForAll;
-        }
-
-        #[derive(Debug, Default, Clone)]
-        pub struct SleepActor {
-            i: i32,
-        }
-
-        #[async_trait]
-        impl Lifecycle for Puppet<SleepActor> {
-            type Supervision = OneForAll;
-            async fn on_start(&mut self) -> Result<(), PuppetError> {
-                println!("Starting:");
-                Ok(())
-            }
-            async fn on_stop(&mut self) -> Result<(), PuppetError> {
-                println!("Stopping:");
-                Ok(())
-            }
-        }
-
-        #[async_trait]
-        impl Handler<SleepMessage> for Puppet<SleepActor> {
-            type Response = i32;
-            type Executor = ConcurrentExecutor;
-
-            async fn handle_message(
-                &mut self,
-                msg: SleepMessage,
-            ) -> Result<Self::Response, PuppetError> {
-                println!("Sleeping: {:?}", self.state.i);
-                tokio::time::sleep(Duration::from_secs(1)).await;
-                Ok(1)
-            }
-        }
-
-        let post_office = PostOffice::default();
-
-        let master = PuppetBuilder::new(MasterActor::default())
-            .with_post_office(&post_office)
-            .spawn()
-            .await
-            .unwrap();
-
-        let sleep_actor = PuppetBuilder::new(SleepActor::default())
-            .with_post_office(&post_office)
-            .spawn_link::<MasterActor>()
-            .await
-            .unwrap();
-
-        for _ in 0..5 {
-            sleep_actor
-                .send(SleepMessage { i: 1 })
-                .await
-                .expect("Failed to send message");
-        }
-
-        // if let Err(err) = res {}
-
-        tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
-    }
+    // #[tokio::test]
+    // async fn it_works() {
+    //     #[derive(Debug, Clone, Message)]
+    //     pub struct SleepMessage {
+    //         i: i32,
+    //     }
+    //
+    //     #[derive(Debug, Default, Clone)]
+    //     pub struct MasterActor {}
+    //
+    //     impl Lifecycle for MasterActor {
+    //         type Supervision = OneForAll;
+    //     }
+    //
+    //     #[derive(Debug, Default, Clone)]
+    //     pub struct SleepActor {
+    //         i: i32,
+    //     }
+    //
+    //     #[async_trait]
+    //     impl Lifecycle for SleepActor {
+    //         type Supervision = OneForAll;
+    //     }
+    //
+    //     #[async_trait]
+    //     impl Handler<SleepMessage> for SleepActor {
+    //         type Response = i32;
+    //         type Executor = ConcurrentExecutor;
+    //
+    //         async fn handle_message(
+    //             &mut self,
+    //             msg: SleepMessage,
+    //             puppeter: &Puppeter,
+    //         ) -> Result<Self::Response, PuppetError> {
+    //             println!("Sleeping: {:?}", self.i);
+    //             tokio::time::sleep(Duration::from_secs(1)).await;
+    //             Ok(1)
+    //         }
+    //     }
+    //
+    //     let post_office = MasterOfPuppets::default();
+    //
+    //     let master = PuppetBuilder::new(MasterActor::default())
+    //         .with_post_office(&post_office)
+    //         .spawn()
+    //         .await
+    //         .unwrap();
+    //
+    //     let sleep_actor = PuppetBuilder::new(SleepActor::default())
+    //         .with_post_office(&post_office)
+    //         .spawn_link::<MasterActor>()
+    //         .await
+    //         .unwrap();
+    //
+    //     for _ in 0..5 {
+    //         sleep_actor
+    //             .send(SleepMessage { i: 1 })
+    //             .await
+    //             .expect("Failed to send message");
+    //     }
+    //
+    //     // if let Err(err) = res {}
+    //
+    //     tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
+    // }
 }

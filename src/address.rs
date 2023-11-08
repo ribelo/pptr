@@ -4,30 +4,26 @@ use tokio::sync::watch;
 
 use crate::{
     errors::{PostmanError, PuppetError},
-    message::{Message, Postman, ServiceCommand, ServicePostman},
+    master_of_puppets::MasterOfPuppets,
+    message::{Message, Postman},
     pid::Pid,
-    post_office::PostOffice,
-    puppet::{
-        Handler, Lifecycle, LifecycleStatus, Puppet, PuppetBuilder, PuppetState, ResponseFor,
-    },
+    puppet::{Handler, Lifecycle, LifecycleStatus, PuppetBuilder, ResponseFor},
 };
 
 #[derive(Debug, Clone)]
 pub struct Address<S>
 where
-    S: PuppetState,
-    Puppet<S>: Lifecycle,
+    S: Lifecycle,
 {
     pub pid: Pid,
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
     pub(crate) message_tx: Postman<S>,
-    pub(crate) post_office: PostOffice,
+    pub(crate) post_office: MasterOfPuppets,
 }
 
 impl<S> Address<S>
 where
-    S: PuppetState,
-    Puppet<S>: Lifecycle,
+    S: Lifecycle,
 {
     pub fn get_status(&self) -> LifecycleStatus {
         *self.status_rx.borrow()
@@ -51,7 +47,7 @@ where
 
     pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
-        Puppet<S>: Handler<E>,
+        S: Handler<E>,
         E: Message + 'static,
     {
         self.message_tx.send::<E>(message).await
@@ -59,7 +55,7 @@ where
 
     pub async fn ask<E>(&self, message: E) -> Result<ResponseFor<S, E>, PostmanError>
     where
-        Puppet<S>: Handler<E>,
+        S: Handler<E>,
         E: Message + 'static,
     {
         self.message_tx
@@ -73,7 +69,7 @@ where
         duration: std::time::Duration,
     ) -> Result<ResponseFor<S, E>, PostmanError>
     where
-        Puppet<S>: Handler<E>,
+        S: Handler<E>,
         E: Message + 'static,
     {
         self.message_tx
@@ -86,8 +82,7 @@ where
         builder: impl Into<PuppetBuilder<P>>,
     ) -> Result<Address<P>, PuppetError>
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         self.post_office.spawn::<S, P>(builder).await
     }
@@ -95,8 +90,7 @@ where
 
 impl<P> fmt::Display for Address<P>
 where
-    P: PuppetState,
-    Puppet<P>: Lifecycle,
+    P: Lifecycle,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Address({})", self.pid)

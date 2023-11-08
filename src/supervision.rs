@@ -1,20 +1,15 @@
 use std::{
-    cell::RefCell,
     fmt,
-    future::Future,
-    pin::Pin,
-    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
 
 use crate::{
-    errors::{CriticalError, PuppetError, RetryError},
+    errors::{PuppetError, RetryError},
+    master_of_puppets::MasterOfPuppets,
     message::ServiceCommand,
     pid::Pid,
-    post_office::PostOffice,
-    puppet::{Lifecycle, Puppet, PuppetState},
 };
 
 pub mod strategy {
@@ -119,7 +114,7 @@ impl RetryConfig {
 #[async_trait]
 pub trait SupervisionStrategy: fmt::Debug {
     async fn handle_failure(
-        post_office: &PostOffice,
+        post_office: &MasterOfPuppets,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError>;
@@ -128,7 +123,7 @@ pub trait SupervisionStrategy: fmt::Debug {
 #[async_trait]
 impl SupervisionStrategy for strategy::OneToOne {
     async fn handle_failure(
-        post_office: &PostOffice,
+        post_office: &MasterOfPuppets,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError> {
@@ -141,7 +136,7 @@ impl SupervisionStrategy for strategy::OneToOne {
 #[async_trait]
 impl SupervisionStrategy for strategy::OneForAll {
     async fn handle_failure(
-        post_office: &PostOffice,
+        post_office: &MasterOfPuppets,
         master: Pid,
         _puppet: Pid,
     ) -> Result<(), PuppetError> {
@@ -159,7 +154,7 @@ impl SupervisionStrategy for strategy::OneForAll {
 #[async_trait]
 impl SupervisionStrategy for strategy::RestForOne {
     async fn handle_failure(
-        post_office: &PostOffice,
+        post_office: &MasterOfPuppets,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError> {

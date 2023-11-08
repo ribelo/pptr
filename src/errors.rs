@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     pid::Pid,
-    puppet::{Lifecycle, LifecycleStatus, Puppet, PuppetState},
+    puppet::{Lifecycle, LifecycleStatus, Puppet, Puppeter},
 };
 
 #[derive(Debug, Error)]
@@ -22,8 +22,7 @@ impl PuppetDoesNotExistError {
     }
     pub fn from_type<P>() -> Self
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         Self::new(Pid::new::<P>())
     }
@@ -59,8 +58,7 @@ impl PuppetAlreadyExist {
     }
     pub fn from_type<P>() -> Self
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         Self::new(Pid::new::<P>())
     }
@@ -95,10 +93,8 @@ impl PermissionDeniedError {
     }
     pub fn from_type<M, P>() -> Self
     where
-        M: PuppetState,
-        Puppet<M>: Lifecycle,
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        M: Lifecycle,
+        P: Lifecycle,
     {
         Self::new(Pid::new::<M>(), Pid::new::<P>())
     }
@@ -145,8 +141,7 @@ impl PuppetCannotHandleMessage {
     }
     pub fn from_type<P>(status: LifecycleStatus) -> Self
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         Self::new(Pid::new::<P>(), status)
     }
@@ -170,8 +165,7 @@ impl NonCriticalError {
     }
     pub fn from_type<P>(message: impl ToString) -> Self
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         Self::new(Pid::new::<P>(), message)
     }
@@ -193,8 +187,7 @@ impl CriticalError {
     }
     pub fn from_type<P>(message: impl ToString) -> Self
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         Self::new(Pid::new::<P>(), message)
     }

@@ -6,7 +6,7 @@ use std::{
 
 use rustc_hash::FxHasher;
 
-use crate::puppet::{Lifecycle, Puppet, PuppetState};
+use crate::puppet::{Lifecycle, Puppet, Puppeter};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Id(u64);
@@ -24,8 +24,7 @@ impl Id {
 
     pub fn to_pid<P>(&self) -> Pid
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         Pid::new::<P>()
     }
@@ -70,8 +69,7 @@ impl Ord for Pid {
 impl Pid {
     pub fn new<P>() -> Self
     where
-        P: PuppetState,
-        Puppet<P>: Lifecycle,
+        P: Lifecycle,
     {
         let id = Id::new::<P>();
         Self {

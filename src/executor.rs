@@ -1,13 +1,10 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use tokio::sync::oneshot;
 
 use crate::{
     errors::{CriticalError, PuppetError},
     message::Message,
-    message::Packet,
-    puppet::{Handler, Puppet, PuppetState},
+    puppet::{Handler, Puppeter},
 };
 
 #[async_trait]
@@ -16,14 +13,12 @@ where
     E: Message,
 {
     async fn execute<P>(
-        puppet: &mut Puppet<P>,
+        puppet: &mut P,
+        puppeter: &mut Puppeter,
         msg: E,
-        reply_address: Option<
-            oneshot::Sender<Result<<Puppet<P> as Handler<E>>::Response, PuppetError>>,
-        >,
+        reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) where
-        P: PuppetState,
-        Puppet<P>: Handler<E>;
+        P: Handler<E>;
 }
 
 pub struct SequentialExecutor;
@@ -37,28 +32,25 @@ where
     E: Message,
 {
     async fn execute<P>(
-        puppet: &mut Puppet<P>,
+        puppet: &mut P,
+        puppeter: &mut Puppeter,
         msg: E,
-        reply_address: Option<
-            oneshot::Sender<Result<<Puppet<P> as Handler<E>>::Response, PuppetError>>,
-        >,
+        reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) where
-        P: PuppetState,
-        Puppet<P>: Handler<E> + Clone,
+        P: Handler<E>,
     {
-        let response = puppet.handle_message(msg).await;
+        let pid = puppeter.pid;
+        let response = puppet.handle_message(msg, puppeter).await;
         if let Err(err) = &response {
-            puppet.report_failure(err.clone()).await;
+            puppeter.report_failure(puppet, err.clone()).await;
         }
         if let Some(reply_address) = reply_address {
             if reply_address.send(response).is_err() {
-                puppet
+                puppeter
                     .report_failure(
-                        CriticalError::new(
-                            puppet.pid,
-                            "Failed to send response over the oneshot channel",
-                        )
-                        .into(),
+                        puppet,
+                        CriticalError::new(pid, "Failed to send response over the oneshot channel")
+                            .into(),
                     )
                     .await;
             }
@@ -72,34 +64,20 @@ where
     E: Message,
 {
     async fn execute<P>(
-        puppet: &mut Puppet<P>,
+        puppet: &mut P,
+        puppeter: &mut Puppeter,
         msg: E,
-        reply_address: Option<
-            oneshot::Sender<Result<<Puppet<P> as Handler<E>>::Response, PuppetError>>,
-        >,
+        reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) where
-        P: PuppetState,
-        Puppet<P>: Handler<E>,
+        P: Handler<E>,
     {
-        let mut cloned_puppet = puppet.clone();
+        let cloned_puppet = puppet.clone();
+        let cloned_puppeter = puppeter.clone();
         tokio::spawn(async move {
-            let response = cloned_puppet.handle_message(msg).await;
-            if let Err(err) = &response {
-                cloned_puppet.report_failure(err.clone()).await;
-            }
-            if let Some(reply_address) = reply_address {
-                if reply_address.send(response).is_err() {
-                    cloned_puppet
-                        .report_failure(
-                            CriticalError::new(
-                                cloned_puppet.pid,
-                                "Failed to send response over the oneshot channel",
-                            )
-                            .into(),
-                        )
-                        .await;
-                }
-            }
+            let mut local_puppet = cloned_puppet;
+            let mut local_puppeter = cloned_puppeter;
+            SequentialExecutor::execute(&mut local_puppet, &mut local_puppeter, msg, reply_address)
+                .await
         });
     }
 }
