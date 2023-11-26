@@ -1,23 +1,20 @@
-use std::{
-    any::type_name,
-    num::NonZeroUsize,
-    sync::{Arc, Mutex},
-};
+use std::{any::type_name, num::NonZeroUsize};
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use rustc_hash::FxHashMap as HashMap;
 use tokio::sync::watch;
 
 use crate::{
     address::Address,
-    errors::{CriticalError, PuppetError, PuppetSendCommandError, PuppetSendMessageError},
+    errors::{
+        CriticalError, PuppetError, PuppetOperationError, PuppetSendCommandError,
+        PuppetSendMessageError,
+    },
     executor::Executor,
     master_of_puppets::MasterOfPuppets,
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
-    pid::{Id, Pid},
+    pid::Pid,
     supervision::{RetryConfig, SupervisionStrategy},
-    BoxedAny,
 };
 
 #[allow(unused_variables)]
@@ -26,16 +23,16 @@ pub trait Lifecycle: Send + Sync + Sized + Default + Clone + 'static {
     type Supervision: SupervisionStrategy + Send + Sync;
 
     async fn on_init(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
-        tracing::debug!("Initializing puppet {}", type_name::<Self>());
+        tracing::debug!(puppet = %type_name::<Self>(), "Initializing puppet");
         Ok(())
     }
     async fn on_start(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
-        tracing::debug!("Starting puppet: {}", type_name::<Self>());
+        tracing::debug!(puppet = %type_name::<Self>(), "Starting puppet" );
         Ok(())
     }
 
     async fn on_stop(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
-        tracing::debug!("Stopping puppet {}", type_name::<Self>());
+        tracing::debug!(puppet = %type_name::<Self>(), "Stopping puppet");
         Ok(())
     }
 }
@@ -53,11 +50,10 @@ pub enum LifecycleStatus {
     Failed,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Puppeter {
     pub pid: Pid,
-    pub(crate) context: Arc<Mutex<HashMap<Id, BoxedAny>>>,
-    pub(crate) post_office: MasterOfPuppets,
+    pub(crate) master_of_puppets: MasterOfPuppets,
     pub(crate) retry_config: RetryConfig,
 }
 
@@ -69,9 +65,8 @@ where
     pub puppet: Option<P>,
     pub messages_bufer_size: NonZeroUsize,
     pub commands_bufer_size: NonZeroUsize,
-    pub(crate) post_office: Option<MasterOfPuppets>,
+    pub(crate) master_of_puppets: Option<MasterOfPuppets>,
     pub retry_config: Option<RetryConfig>,
-    phantom: std::marker::PhantomData<P>,
 }
 
 impl<P> PuppetBuilder<P>
@@ -84,9 +79,8 @@ where
             puppet: Some(state),
             messages_bufer_size: NonZeroUsize::new(1024).unwrap(),
             commands_bufer_size: NonZeroUsize::new(16).unwrap(),
-            post_office: None,
+            master_of_puppets: None,
             retry_config: Some(Default::default()),
-            phantom: std::marker::PhantomData,
         }
     }
 
@@ -101,7 +95,7 @@ where
     }
 
     pub fn with_post_office(mut self, post_office: &MasterOfPuppets) -> Self {
-        self.post_office = Some(post_office.clone());
+        self.master_of_puppets = Some(post_office.clone());
         self
     }
 
@@ -109,8 +103,8 @@ where
     where
         P: Lifecycle,
     {
-        let post_office = self.post_office.take().unwrap_or_default();
-        post_office.spawn::<P, P>(self).await
+        let master_of_puppets = self.master_of_puppets.take().unwrap_or_default();
+        master_of_puppets.spawn_puppet::<P, P>(self).await
     }
 
     pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
@@ -118,8 +112,8 @@ where
         P: Lifecycle,
         M: Lifecycle,
     {
-        let post_office = self.post_office.take().unwrap_or_default();
-        post_office.spawn::<M, P>(self).await
+        let master_of_puppets = self.master_of_puppets.take().unwrap_or_default();
+        master_of_puppets.spawn_puppet::<M, P>(self).await
     }
 }
 
@@ -334,7 +328,7 @@ impl Puppeter {
     where
         P: Lifecycle,
     {
-        self.post_office.is_puppet_exists::<P>()
+        self.master_of_puppets.is_puppet_exists::<P>()
     }
 
     pub fn get_status<P>(&self) -> Option<LifecycleStatus>
@@ -342,11 +336,11 @@ impl Puppeter {
         P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
-        self.post_office.get_status_by_pid(puppet)
+        self.master_of_puppets.get_puppet_status_by_pid(puppet)
     }
 
     pub(crate) fn set_status(&self, status: LifecycleStatus) {
-        self.post_office.set_status_by_pid(self.pid, status)
+        self.master_of_puppets.set_status_by_pid(self.pid, status)
     }
 
     pub fn has_puppet<M, P>(&self) -> Option<bool>
@@ -356,7 +350,8 @@ impl Puppeter {
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
-        self.post_office.has_puppet_by_pid(master_pid, puppet_pid)
+        self.master_of_puppets
+            .puppet_has_puppet_by_pid(master_pid, puppet_pid)
     }
 
     pub fn get_master<P>(&self) -> Option<Pid>
@@ -364,7 +359,27 @@ impl Puppeter {
         P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
-        self.post_office.get_master_by_pid(puppet)
+        self.master_of_puppets.get_puppet_master_by_pid(puppet)
+    }
+
+    pub fn set_master<P, M>(&self) -> Result<(), PuppetOperationError>
+    where
+        P: Lifecycle,
+        M: Lifecycle,
+    {
+        let master_pid = Pid::new::<M>();
+        let puppet_pid = Pid::new::<P>();
+        self.master_of_puppets
+            .set_puppet_master_by_pid(self.pid, master_pid, puppet_pid)
+    }
+
+    pub fn detach_puppet<P>(&self) -> Result<(), PuppetOperationError>
+    where
+        P: Lifecycle,
+    {
+        let puppet_pid = Pid::new::<P>();
+        self.master_of_puppets
+            .detach_puppet_by_pid(self.pid, puppet_pid)
     }
 
     pub fn has_permission<M, P>(&self) -> Option<bool>
@@ -374,19 +389,21 @@ impl Puppeter {
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
-        self.post_office
-            .has_permission_by_pid(master_pid, puppet_pid)
+        self.master_of_puppets
+            .puppet_has_permission_by_pid(master_pid, puppet_pid)
     }
 
-    // pub async fn spawn<P>(
-    //     &self,
-    //     builder: impl Into<PuppetBuilder<P>>,
-    // ) -> Result<Address<P>, PuppetError>
-    // where
-    //     P: Lifecycle,
-    // {
-    //     self.post_office.spawn::<S, P>(builder).await
-    // }
+    pub async fn spawn<P>(
+        &self,
+        builder: impl Into<PuppetBuilder<P>>,
+    ) -> Result<Address<P>, PuppetError>
+    where
+        P: Lifecycle,
+    {
+        self.master_of_puppets
+            .spawn_puppet_by_pid::<P>(self.pid, builder)
+            .await
+    }
 
     #[async_recursion]
     pub async fn report_failure<P>(&mut self, puppet: &mut P, error: PuppetError)
@@ -404,7 +421,7 @@ impl Puppeter {
             }
         } else {
             let service_postman = self
-                .post_office
+                .master_of_puppets
                 .get_service_postman_by_pid(master_pid)
                 .clone()
                 .expect("Service postman not found");
@@ -430,9 +447,12 @@ impl Puppeter {
             // Do nothing
             PuppetError::NonCritical(_) => {}
             PuppetError::Critical(_) => {
-                if let Err(err) =
-                    <P as Lifecycle>::Supervision::handle_failure(&self.post_office, self.pid, pid)
-                        .await
+                if let Err(err) = <P as Lifecycle>::Supervision::handle_failure(
+                    &self.master_of_puppets,
+                    self.pid,
+                    pid,
+                )
+                .await
                 {
                     match err {
                         // Do nothing
@@ -452,7 +472,7 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        self.post_office.send::<P, E>(message).await
+        self.master_of_puppets.send::<P, E>(message).await
     }
 
     pub async fn ask<P, E>(&self, message: E) -> Result<ResponseFor<P, E>, PuppetSendMessageError>
@@ -460,7 +480,7 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        self.post_office.ask::<P, E>(message).await
+        self.master_of_puppets.ask::<P, E>(message).await
     }
 
     pub async fn ask_with_timeout<P, E>(
@@ -472,7 +492,7 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        self.post_office
+        self.master_of_puppets
             .ask_with_timeout::<P, E>(message, duration)
             .await
     }
@@ -492,7 +512,7 @@ impl Puppeter {
         puppet: Pid,
         command: ServiceCommand,
     ) -> Result<(), PuppetSendCommandError> {
-        self.post_office
+        self.master_of_puppets
             .send_command_by_pid(self.pid, puppet, command)
             .await
     }
@@ -534,7 +554,7 @@ impl Puppeter {
         let mut started_puppets = Vec::new();
 
         // Try to fetch the puppets by the given pid.
-        if let Some(puppets) = self.post_office.get_puppets_by_pid(self.pid) {
+        if let Some(puppets) = self.master_of_puppets.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet to start it.
             for puppet in puppets {
                 if self.pid == puppet {
@@ -573,7 +593,7 @@ impl Puppeter {
         let mut stopped_puppets = Vec::new();
 
         // Try to fetch the puppets by the given pid.
-        if let Some(puppets) = self.post_office.get_puppets_by_pid(self.pid) {
+        if let Some(puppets) = self.master_of_puppets.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet in reverse to stop it.
             for puppet in puppets.iter().rev() {
                 if self.pid == *puppet {
@@ -610,7 +630,7 @@ impl Puppeter {
         P: Lifecycle,
     {
         // Try to fetch the puppets by the given pid.
-        if let Some(puppets) = self.post_office.get_puppets_by_pid(self.pid) {
+        if let Some(puppets) = self.master_of_puppets.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet in reverse to stop it.
             for pid in puppets.iter().rev() {
                 // Attempt to send the stop command to the current puppet.
@@ -650,7 +670,7 @@ where
     pub(crate) command_rx: ServiceMailbox,
 }
 
-#[allow(dead_code)]
+#[allow(dead_code, unused_imports)]
 #[cfg(test)]
 mod tests {
 

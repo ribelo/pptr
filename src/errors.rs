@@ -1,13 +1,10 @@
-use std::{
-    any::{type_name, TypeId},
-    fmt,
-};
+use std::fmt;
 
 use thiserror::Error;
 
 use crate::{
     pid::Pid,
-    puppet::{Lifecycle, LifecycleStatus, Puppet, Puppeter},
+    puppet::{Lifecycle, LifecycleStatus},
 };
 
 #[derive(Debug, Error)]
@@ -39,6 +36,10 @@ impl From<PuppetDoesNotExistError> for PuppetError {
         CriticalError::from(value).into()
     }
 }
+
+#[derive(Debug, Error)]
+#[error("Resource already exist")]
+pub struct ResourceAlreadyExist;
 
 #[derive(Debug, Error)]
 #[error("Puppet already exist: {puppet}")]

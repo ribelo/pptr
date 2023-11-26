@@ -23,8 +23,6 @@ where
 
 pub struct SequentialExecutor;
 pub struct ConcurrentExecutor;
-#[cfg(feature = "parallel")]
-pub struct ParallelExecutor;
 
 #[async_trait]
 impl<E> Executor<E> for SequentialExecutor

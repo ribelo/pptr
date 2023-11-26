@@ -6,7 +6,7 @@ use std::{
 
 use rustc_hash::FxHasher;
 
-use crate::puppet::{Lifecycle, Puppet, Puppeter};
+use crate::puppet::Lifecycle;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Id(u64);

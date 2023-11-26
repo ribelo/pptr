@@ -10,7 +10,7 @@ use crate::{
     puppet::{Handler, Lifecycle, LifecycleStatus, PuppetBuilder, ResponseFor},
 };
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Address<S>
 where
     S: Lifecycle,
@@ -18,7 +18,7 @@ where
     pub pid: Pid,
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
     pub(crate) message_tx: Postman<S>,
-    pub(crate) post_office: MasterOfPuppets,
+    pub(crate) master_of_puppets: MasterOfPuppets,
 }
 
 impl<S> Address<S>
@@ -84,7 +84,7 @@ where
     where
         P: Lifecycle,
     {
-        self.post_office.spawn::<S, P>(builder).await
+        self.master_of_puppets.spawn_puppet::<S, P>(builder).await
     }
 }
 

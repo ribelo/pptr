@@ -9,13 +9,12 @@ pub mod executor;
 pub mod master_of_puppets;
 pub mod message;
 pub mod pid;
-pub mod praxis;
 pub mod puppet;
 pub mod supervision;
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
 
-mod prelude {
+pub mod prelude {
     pub use crate::address::Address;
     pub use crate::errors::PuppetError;
     pub use crate::executor::Executor;

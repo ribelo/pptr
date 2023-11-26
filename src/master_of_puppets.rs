@@ -1,7 +1,10 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    hash::BuildHasherDefault,
+    sync::{Arc, Mutex},
+};
 
 use indexmap::IndexSet;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use tokio::sync::{mpsc, watch};
 
 use crate::{
@@ -9,59 +12,42 @@ use crate::{
     errors::{
         PermissionDeniedError, PuppetAlreadyExist, PuppetCannotHandleMessage,
         PuppetDoesNotExistError, PuppetError, PuppetOperationError, PuppetRegisterError,
-        PuppetSendCommandError, PuppetSendMessageError,
+        PuppetSendCommandError, PuppetSendMessageError, ResourceAlreadyExist,
     },
     message::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
     },
-    pid::Pid,
+    pid::{Id, Pid},
     puppet::{
         Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, Puppeter, ResponseFor,
     },
     BoxedAny,
 };
 
-#[derive(Debug, Clone)]
+pub type StatusChannels = (
+    watch::Sender<LifecycleStatus>,
+    watch::Receiver<LifecycleStatus>,
+);
+
+type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
+
+#[derive(Clone, Default)]
 pub struct MasterOfPuppets {
-    inner: Arc<Mutex<MasterOfPuppetsInner>>,
-}
-
-#[derive(Debug)]
-pub struct MasterOfPuppetsInner {
-    pub(crate) message_postmans: HashMap<Pid, BoxedAny>,
-    pub(crate) service_postmans: HashMap<Pid, ServicePostman>,
-    pub(crate) statuses: HashMap<
-        Pid,
-        (
-            watch::Sender<LifecycleStatus>,
-            watch::Receiver<LifecycleStatus>,
-        ),
-    >,
-    pub(crate) master_to_puppets: HashMap<Pid, IndexSet<Pid>>,
-    pub(crate) puppet_to_master: HashMap<Pid, Pid>,
-}
-
-impl Default for MasterOfPuppets {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
+    pub(crate) service_postmans: Arc<Mutex<FxHashMap<Pid, ServicePostman>>>,
+    pub(crate) statuses: Arc<Mutex<FxHashMap<Pid, StatusChannels>>>,
+    pub(crate) master_to_puppets: Arc<Mutex<FxHashMap<Pid, FxIndexSet<Pid>>>>,
+    pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
+    pub(crate) resources: Arc<Mutex<FxHashMap<Id, BoxedAny>>>,
 }
 
 impl MasterOfPuppets {
     pub fn new() -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(MasterOfPuppetsInner {
-                message_postmans: HashMap::default(),
-                service_postmans: HashMap::default(),
-                statuses: HashMap::default(),
-                master_to_puppets: HashMap::default(),
-                puppet_to_master: HashMap::default(),
-            })),
-        }
+        Default::default()
     }
 
-    pub fn register<M, P>(
+    pub fn register_puppet<M, P>(
         &self,
         postman: Postman<P>,
         service_postman: ServicePostman,
@@ -74,8 +60,21 @@ impl MasterOfPuppets {
     {
         // Create Pid references for the master and puppet
         let master = Pid::new::<M>();
-        let puppet = Pid::new::<P>();
+        self.register_puppet_by_pid(master, postman, service_postman, status_tx, status_rx)
+    }
 
+    pub(crate) fn register_puppet_by_pid<P>(
+        &self,
+        master: Pid,
+        postman: Postman<P>,
+        service_postman: ServicePostman,
+        status_tx: watch::Sender<LifecycleStatus>,
+        status_rx: watch::Receiver<LifecycleStatus>,
+    ) -> Result<(), PuppetRegisterError>
+    where
+        P: Lifecycle,
+    {
+        let puppet = Pid::new::<P>();
         // Check if the puppet already exists by its Pid
         if self.is_puppet_exists_by_pid(puppet) {
             // If the puppet exists, return an error indicating it's already registered
@@ -88,27 +87,37 @@ impl MasterOfPuppets {
             return Err(PuppetDoesNotExistError::new(master).into());
         }
 
-        // Access the inner state by acquiring a lock on the mutex
-        let mut inner = self.inner.lock().expect("Failed to acquire mutex lock");
-
         // Add the puppet's postman to the message_postmans map
-        inner.message_postmans.insert(puppet, Box::new(postman));
+        self.message_postmans
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .insert(puppet, Box::new(postman));
 
         // Add the puppet's service postman to the service_postmans map
-        inner.service_postmans.insert(puppet, service_postman);
+        self.service_postmans
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .insert(puppet, service_postman);
 
         // Add the puppet to the master's set of puppets
-        inner
-            .master_to_puppets
+        self.master_to_puppets
+            .lock()
+            .expect("Failed to acquire mutex lock")
             .entry(master)
             .or_default()
             .insert(puppet);
 
         // Associate the puppet with the master in the puppet_to_master map
-        inner.puppet_to_master.insert(puppet, master);
+        self.puppet_to_master
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .insert(puppet, master);
 
         // Add the puppet's status receiver to the statuses map
-        inner.statuses.insert(puppet, (status_tx, status_rx));
+        self.statuses
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .insert(puppet, (status_tx, status_rx));
 
         // Return a successful result indicating the registration was successful
         Ok(())
@@ -122,8 +131,8 @@ impl MasterOfPuppets {
         self.is_puppet_exists_by_pid(puppet)
     }
 
-    pub fn is_puppet_exists_by_pid(&self, puppet: Pid) -> bool {
-        self.get_master_by_pid(puppet).is_some()
+    pub(crate) fn is_puppet_exists_by_pid(&self, puppet: Pid) -> bool {
+        self.get_puppet_master_by_pid(puppet).is_some()
     }
 
     pub fn get_postman<P>(&self) -> Option<Postman<P>>
@@ -131,29 +140,26 @@ impl MasterOfPuppets {
         P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
-        self.inner
+        self.message_postmans
             .lock()
             .expect("Failed to acquire mutex lock")
-            .message_postmans
             .get(&puppet)
             .and_then(|boxed| boxed.downcast_ref::<Postman<P>>())
             .cloned()
     }
 
     pub(crate) fn get_service_postman_by_pid(&self, puppet: Pid) -> Option<ServicePostman> {
-        self.inner
+        self.service_postmans
             .lock()
             .expect("Failed to acquire mutex lock")
-            .service_postmans
             .get(&puppet)
             .cloned()
     }
 
     pub(crate) fn set_status_by_pid(&self, puppet: Pid, status: LifecycleStatus) {
-        self.inner
+        self.statuses
             .lock()
             .expect("Failed to acquire mutex lock")
-            .statuses
             .get(&puppet)
             .map(|(tx, _)| {
                 tx.send_if_modified(|current| {
@@ -167,53 +173,80 @@ impl MasterOfPuppets {
             });
     }
 
-    pub fn subscribe_status_by_pid(&self, puppet: Pid) -> Option<watch::Receiver<LifecycleStatus>> {
-        self.inner
+    pub fn subscribe_puppet_status<P>(&self) -> Option<watch::Receiver<LifecycleStatus>>
+    where
+        P: Lifecycle,
+    {
+        let puppet = Pid::new::<P>();
+        self.subscribe_puppet_status_by_pid(puppet)
+    }
+
+    pub(crate) fn subscribe_puppet_status_by_pid(
+        &self,
+        puppet: Pid,
+    ) -> Option<watch::Receiver<LifecycleStatus>> {
+        self.statuses
             .lock()
             .expect("Failed to acquire mutex lock")
-            .statuses
             .get(&puppet)
             .map(|(_, rx)| rx.clone())
     }
 
-    pub fn get_status_by_pid(&self, puppet: Pid) -> Option<LifecycleStatus> {
-        self.inner
+    pub fn get_puppet_status<P>(&self) -> Option<LifecycleStatus>
+    where
+        P: Lifecycle,
+    {
+        let puppet = Pid::new::<P>();
+        self.get_puppet_status_by_pid(puppet)
+    }
+
+    pub(crate) fn get_puppet_status_by_pid(&self, puppet: Pid) -> Option<LifecycleStatus> {
+        self.statuses
             .lock()
             .expect("Failed to acquire mutex lock")
-            .statuses
             .get(&puppet)
             .map(|(_, rx)| *rx.borrow())
     }
 
-    pub fn has_puppet_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
-        self.inner
+    pub(crate) fn puppet_has_puppet_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
+        self.master_to_puppets
             .lock()
             .expect("Failed to acquire mutex lock")
-            .master_to_puppets
             .get(&master)
             .map(|puppets| puppets.contains(&puppet))
     }
 
-    pub fn has_permission_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
-        self.has_puppet_by_pid(master, puppet)
+    pub(crate) fn puppet_has_permission_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
+        self.puppet_has_puppet_by_pid(master, puppet)
     }
 
-    pub fn get_master_by_pid(&self, puppet: Pid) -> Option<Pid> {
-        self.inner
+    pub(crate) fn get_puppet_master_by_pid(&self, puppet: Pid) -> Option<Pid> {
+        self.puppet_to_master
             .lock()
             .expect("Failed to acquire mutex lock")
-            .puppet_to_master
             .get(&puppet)
             .cloned()
     }
 
-    pub fn set_master_by_pid(
+    pub fn set_puppet_master<O, M, P>(&self) -> Result<(), PuppetOperationError>
+    where
+        O: Lifecycle,
+        M: Lifecycle,
+        P: Lifecycle,
+    {
+        let old_master = Pid::new::<O>();
+        let new_master = Pid::new::<M>();
+        let puppet = Pid::new::<P>();
+        self.set_puppet_master_by_pid(old_master, new_master, puppet)
+    }
+
+    pub(crate) fn set_puppet_master_by_pid(
         &self,
         old_master: Pid,
         new_master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetOperationError> {
-        match self.has_permission_by_pid(old_master, puppet) {
+        match self.puppet_has_permission_by_pid(old_master, puppet) {
             None => Err(PuppetDoesNotExistError::new(puppet).into()),
             Some(false) => {
                 Err(PermissionDeniedError::new(old_master, puppet)
@@ -221,44 +254,46 @@ impl MasterOfPuppets {
                     .into())
             }
             Some(true) => {
-                let mut inner = self.inner.lock().expect("Failed to acquire mutex lock");
-
                 // Remove puppet from old master
-                inner
-                    .master_to_puppets
+                self.master_to_puppets
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
                     .get_mut(&old_master)
                     .expect("Old master has no puppets")
                     .shift_remove(&puppet);
 
                 // Add puppet to new master
-                inner
-                    .master_to_puppets
+                self.master_to_puppets
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
                     .entry(new_master)
                     .or_default()
                     .insert(puppet);
 
                 // Set new master for puppet
-                inner.puppet_to_master.insert(puppet, new_master);
+                self.puppet_to_master
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
+                    .insert(puppet, new_master);
                 Ok(())
             }
         }
     }
 
-    pub fn get_puppets_by_pid(&self, master: Pid) -> Option<IndexSet<Pid>> {
-        self.inner
+    pub(crate) fn get_puppets_by_pid(&self, master: Pid) -> Option<FxIndexSet<Pid>> {
+        self.master_to_puppets
             .lock()
             .expect("Failed to acquire mutex lock")
-            .master_to_puppets
             .get(&master)
             .cloned()
     }
 
-    pub fn detach_puppet_by_pid(
+    pub(crate) fn detach_puppet_by_pid(
         &self,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetOperationError> {
-        match self.has_permission_by_pid(master, puppet) {
+        match self.puppet_has_permission_by_pid(master, puppet) {
             None => Err(PuppetDoesNotExistError::new(puppet).into()),
             Some(false) => {
                 Err(PermissionDeniedError::new(master, puppet)
@@ -266,18 +301,29 @@ impl MasterOfPuppets {
                     .into())
             }
             Some(true) => {
-                self.set_master_by_pid(master, puppet, puppet).unwrap();
+                self.set_puppet_master_by_pid(master, puppet, puppet)
+                    .unwrap();
                 Ok(())
             }
         }
     }
 
-    pub fn delete_puppet_by_pid(
+    pub fn delete_puppet<O, P>(&self) -> Result<(), PuppetOperationError>
+    where
+        O: Lifecycle,
+        P: Lifecycle,
+    {
+        let master = Pid::new::<O>();
+        let puppet = Pid::new::<P>();
+        self.delete_puppet_by_pid(master, puppet)
+    }
+
+    pub(crate) fn delete_puppet_by_pid(
         &self,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetOperationError> {
-        match self.has_permission_by_pid(master, puppet) {
+        match self.puppet_has_permission_by_pid(master, puppet) {
             None => Err(PuppetDoesNotExistError::new(puppet).into()),
             Some(false) => {
                 Err(PermissionDeniedError::new(master, puppet)
@@ -285,22 +331,31 @@ impl MasterOfPuppets {
                     .into())
             }
             Some(true) => {
-                let mut inner = self.inner.lock().expect("Failed to acquire mutex lock");
                 // Delete address from addresses
-                inner.message_postmans.remove(&puppet);
+                self.message_postmans
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
+                    .remove(&puppet);
 
                 // Delete status from statuses
-                inner.statuses.remove(&puppet);
+                self.statuses
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
+                    .remove(&puppet);
 
                 // Delete puppet from master_to_puppets
-                inner
-                    .master_to_puppets
+                self.master_to_puppets
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
                     .get_mut(&master)
                     .expect("Master has no puppets")
                     .shift_remove(&puppet);
 
                 // Delete puppet from puppet_to_master
-                inner.puppet_to_master.remove(&puppet);
+                self.puppet_to_master
+                    .lock()
+                    .expect("Failed to acquire mutex lock")
+                    .remove(&puppet);
 
                 // TODO: Break loop
                 Ok(())
@@ -330,7 +385,7 @@ impl MasterOfPuppets {
         Ok(address.send_and_await_response::<E>(message, None).await?)
     }
 
-    pub async fn ask_with_timeout<P, E>(
+    pub(crate) async fn ask_with_timeout<P, E>(
         &self,
         message: E,
         duration: std::time::Duration,
@@ -347,13 +402,13 @@ impl MasterOfPuppets {
             .await?)
     }
 
-    pub async fn send_command_by_pid(
+    pub(crate) async fn send_command_by_pid(
         &self,
         master: Pid,
         puppet: Pid,
         command: ServiceCommand,
     ) -> Result<(), PuppetSendCommandError> {
-        match self.has_permission_by_pid(master, puppet) {
+        match self.puppet_has_permission_by_pid(master, puppet) {
             None => Err(PuppetDoesNotExistError::new(puppet).into()),
             Some(false) => {
                 Err(PermissionDeniedError::new(master, puppet)
@@ -369,7 +424,7 @@ impl MasterOfPuppets {
         }
     }
 
-    pub async fn spawn<M, P>(
+    pub(crate) async fn spawn_puppet<M, P>(
         &self,
         builder: impl Into<PuppetBuilder<P>>,
     ) -> Result<Address<P>, PuppetError>
@@ -377,11 +432,21 @@ impl MasterOfPuppets {
         M: Lifecycle,
         P: Lifecycle,
     {
-        let master_pid = Pid::new::<M>();
-        let puppet_pid = Pid::new::<P>();
+        let master = Pid::new::<M>();
+        self.spawn_puppet_by_pid(master, builder).await
+    }
 
-        if !self.is_puppet_exists::<M>() && master_pid != puppet_pid {
-            return Err(PuppetDoesNotExistError::from_type::<M>().into());
+    pub(crate) async fn spawn_puppet_by_pid<P>(
+        &self,
+        master_pid: Pid,
+        builder: impl Into<PuppetBuilder<P>>,
+    ) -> Result<Address<P>, PuppetError>
+    where
+        P: Lifecycle,
+    {
+        let puppet_pid = Pid::new::<P>();
+        if !self.is_puppet_exists_by_pid(master_pid) && master_pid != puppet_pid {
+            return Err(PuppetDoesNotExistError::new(master_pid).into());
         }
 
         let mut builder = builder.into();
@@ -394,7 +459,8 @@ impl MasterOfPuppets {
             mpsc::channel::<ServicePacket>(builder.commands_bufer_size.into());
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
-        self.register::<M, P>(
+        self.register_puppet_by_pid::<P>(
+            master_pid,
             postman.clone(),
             service_postman,
             status_tx,
@@ -404,8 +470,7 @@ impl MasterOfPuppets {
 
         let mut puppeter = Puppeter {
             pid,
-            context: Default::default(),
-            post_office: self.clone(),
+            master_of_puppets: self.clone(),
             retry_config,
         };
 
@@ -420,7 +485,7 @@ impl MasterOfPuppets {
             pid,
             status_rx,
             message_tx: postman,
-            post_office: self.clone(),
+            master_of_puppets: self.clone(),
         };
 
         puppet.on_init(&puppeter).await?;
@@ -428,6 +493,57 @@ impl MasterOfPuppets {
 
         tokio::spawn(run_puppet_loop(puppet, puppeter, handle));
         Ok(address)
+    }
+
+    pub fn add_resource<T>(&self, resource: T) -> Result<(), ResourceAlreadyExist>
+    where
+        T: Send + Sync + Clone + 'static,
+    {
+        let id = Id::new::<T>();
+        if let std::collections::hash_map::Entry::Vacant(e) = self
+            .resources
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .entry(id)
+        {
+            e.insert(Box::new(resource));
+            Ok(())
+        } else {
+            Err(ResourceAlreadyExist)
+        }
+    }
+
+    pub fn get_resource<T>(&self) -> Option<T>
+    where
+        T: Send + Sync + Clone + 'static,
+    {
+        let id = Id::new::<T>();
+        self.resources
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .get(&id)
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+            .cloned()
+    }
+
+    pub fn with_resource<T, F, R>(&self, f: F) -> Option<R>
+    where
+        T: Send + Sync + Clone + 'static,
+        F: FnOnce(&T) -> R,
+    {
+        self.resources
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .get(&Id::new::<T>())
+            .and_then(|boxed| boxed.downcast_ref::<T>())
+            .map(f)
+    }
+
+    pub fn expect_resource<T>(&self) -> T
+    where
+        T: Send + Sync + Clone + 'static,
+    {
+        self.get_resource::<T>().expect("Resource doesn't exist")
     }
 }
 
@@ -537,8 +653,8 @@ mod tests {
         type Executor = SequentialExecutor;
         async fn handle_message(
             &mut self,
-            msg: MasterMessage,
-            puppeter: &Puppeter,
+            _msg: MasterMessage,
+            _puppeter: &Puppeter,
         ) -> Result<Self::Response, PuppetError> {
             Ok(())
         }
@@ -550,8 +666,8 @@ mod tests {
         type Executor = SequentialExecutor;
         async fn handle_message(
             &mut self,
-            msg: PuppetMessage,
-            puppeter: &Puppeter,
+            _msg: PuppetMessage,
+            _puppeter: &Puppeter,
         ) -> Result<Self::Response, PuppetError> {
             Ok(())
         }
@@ -568,7 +684,7 @@ mod tests {
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(service_tx);
 
-        mop.register::<M, P>(postman, service_postman, status_tx, status_rx)
+        mop.register_puppet::<M, P>(postman, service_postman, status_tx, status_rx)
     }
 
     #[tokio::test]
@@ -629,11 +745,11 @@ mod tests {
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
         assert_eq!(
-            mop.get_status_by_pid(puppet_pid),
+            mop.get_puppet_status_by_pid(puppet_pid),
             Some(LifecycleStatus::Inactive)
         );
         let master_pid = Pid::new::<MasterActor>();
-        assert!(mop.get_status_by_pid(master_pid).is_none());
+        assert!(mop.get_puppet_status_by_pid(master_pid).is_none());
     }
 
     #[tokio::test]
@@ -644,7 +760,7 @@ mod tests {
         let puppet_pid = Pid::new::<PuppetActor>();
         mop.set_status_by_pid(puppet_pid, LifecycleStatus::Active);
         assert_eq!(
-            mop.get_status_by_pid(puppet_pid),
+            mop.get_puppet_status_by_pid(puppet_pid),
             Some(LifecycleStatus::Active)
         );
     }
@@ -655,7 +771,7 @@ mod tests {
         let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
-        let rx = mop.subscribe_status_by_pid(puppet_pid).unwrap();
+        let rx = mop.subscribe_puppet_status_by_pid(puppet_pid).unwrap();
         mop.set_status_by_pid(puppet_pid, LifecycleStatus::Active);
         assert_eq!(*rx.borrow(), LifecycleStatus::Active);
     }
@@ -669,9 +785,13 @@ mod tests {
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop.has_puppet_by_pid(master_pid, puppet_pid).is_some());
+        assert!(mop
+            .puppet_has_puppet_by_pid(master_pid, puppet_pid)
+            .is_some());
         let master_pid = Pid::new::<PuppetActor>();
-        assert!(mop.has_puppet_by_pid(master_pid, puppet_pid).is_none());
+        assert!(mop
+            .puppet_has_puppet_by_pid(master_pid, puppet_pid)
+            .is_none());
     }
 
     #[tokio::test]
@@ -683,9 +803,13 @@ mod tests {
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop.has_permission_by_pid(master_pid, puppet_pid).is_some());
+        assert!(mop
+            .puppet_has_permission_by_pid(master_pid, puppet_pid)
+            .is_some());
         let master_pid = Pid::new::<PuppetActor>();
-        assert!(mop.has_permission_by_pid(master_pid, puppet_pid).is_none());
+        assert!(mop
+            .puppet_has_permission_by_pid(master_pid, puppet_pid)
+            .is_none());
     }
 
     #[tokio::test]
@@ -697,8 +821,8 @@ mod tests {
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert_eq!(mop.get_master_by_pid(puppet_pid), Some(master_pid));
-        assert_eq!(mop.get_master_by_pid(master_pid), Some(master_pid));
+        assert_eq!(mop.get_puppet_master_by_pid(puppet_pid), Some(master_pid));
+        assert_eq!(mop.get_puppet_master_by_pid(master_pid), Some(master_pid));
     }
 
     #[tokio::test]
@@ -711,10 +835,10 @@ mod tests {
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
         assert!(mop
-            .set_master_by_pid(puppet_pid, master_pid, puppet_pid)
+            .set_puppet_master_by_pid(puppet_pid, master_pid, puppet_pid)
             .is_ok());
-        assert_eq!(mop.get_master_by_pid(puppet_pid), Some(master_pid));
-        assert_eq!(mop.get_master_by_pid(master_pid), Some(master_pid));
+        assert_eq!(mop.get_puppet_master_by_pid(puppet_pid), Some(master_pid));
+        assert_eq!(mop.get_puppet_master_by_pid(master_pid), Some(master_pid));
     }
 
     #[tokio::test]
@@ -741,8 +865,8 @@ mod tests {
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
         assert!(mop.detach_puppet_by_pid(master_pid, puppet_pid).is_ok());
-        assert_eq!(mop.get_master_by_pid(puppet_pid), Some(puppet_pid));
-        assert_eq!(mop.get_master_by_pid(master_pid), Some(master_pid));
+        assert_eq!(mop.get_puppet_master_by_pid(puppet_pid), Some(puppet_pid));
+        assert_eq!(mop.get_puppet_master_by_pid(master_pid), Some(master_pid));
     }
 
     #[tokio::test]
@@ -763,11 +887,11 @@ mod tests {
     async fn test_spawn() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let res = mop
-            .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_err());
     }
@@ -776,7 +900,7 @@ mod tests {
     async fn test_send() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
 
@@ -795,7 +919,7 @@ mod tests {
     async fn test_ask() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
 
@@ -814,7 +938,7 @@ mod tests {
     async fn test_ask_with_timeout() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let res = mop
@@ -834,7 +958,7 @@ mod tests {
     async fn test_send_command_stop_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -842,7 +966,7 @@ mod tests {
             .send_command_by_pid(puppet_pid, puppet_pid, ServiceCommand::Stop)
             .await;
         assert!(res.is_ok());
-        let status = mop.get_status_by_pid(puppet_pid).unwrap();
+        let status = mop.get_puppet_status_by_pid(puppet_pid).unwrap();
         assert_eq!(status, LifecycleStatus::Inactive);
     }
 
@@ -850,7 +974,7 @@ mod tests {
     async fn test_send_command_restart_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -862,7 +986,7 @@ mod tests {
             )
             .await;
         assert!(res.is_ok());
-        let status = mop.get_status_by_pid(puppet_pid).unwrap();
+        let status = mop.get_puppet_status_by_pid(puppet_pid).unwrap();
         assert_eq!(status, LifecycleStatus::Active);
     }
 }
