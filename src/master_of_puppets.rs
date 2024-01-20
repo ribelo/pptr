@@ -19,6 +19,7 @@ use crate::{
         ServicePostman,
     },
     pid::{Id, Pid},
+    prelude::CriticalError,
     puppet::{
         Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, Puppeter, ResponseFor,
     },
@@ -42,6 +43,7 @@ pub struct MasterOfPuppets {
     pub(crate) resources: Arc<Mutex<FxHashMap<Id, BoxedAny>>>,
 }
 
+#[allow(clippy::expect_used)]
 impl MasterOfPuppets {
     #[must_use]
     pub fn new() -> Self {
@@ -306,8 +308,7 @@ impl MasterOfPuppets {
                     .into())
             }
             Some(true) => {
-                self.set_puppet_master_by_pid(master, puppet, puppet)
-                    .unwrap();
+                self.set_puppet_master_by_pid(master, puppet, puppet)?;
                 Ok(())
             }
         }
@@ -421,7 +422,9 @@ impl MasterOfPuppets {
                     .into())
             }
             Some(true) => {
-                let serivce_address = self.get_service_postman_by_pid(puppet).unwrap();
+                let Some(serivce_address) = self.get_service_postman_by_pid(puppet) else {
+                    return Err(PuppetDoesNotExistError::new(puppet).into());
+                };
                 Ok(serivce_address
                     .send_and_await_response(puppet, command, None)
                     .await?)
@@ -444,7 +447,7 @@ impl MasterOfPuppets {
     pub(crate) async fn spawn_puppet_by_pid<P>(
         &self,
         master_pid: Pid,
-        builder: impl Into<PuppetBuilder<P>>,
+        builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
@@ -455,7 +458,9 @@ impl MasterOfPuppets {
         }
 
         let mut builder = builder.into();
-        let mut puppet = builder.puppet.take().unwrap();
+        let Some(mut puppet) = builder.puppet.take() else {
+            return Err(CriticalError::new(puppet_pid, "PuppetBuilder has no puppet").into());
+        };
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
         let (message_tx, message_rx) =
@@ -471,7 +476,9 @@ impl MasterOfPuppets {
             status_tx,
             status_rx.clone(),
         )?;
-        let retry_config = builder.retry_config.take().unwrap();
+        let Some(retry_config) = builder.retry_config.take() else {
+            return Err(CriticalError::new(puppet_pid, "PuppetBuilder has no RetryConfig").into());
+        };
 
         let mut puppeter = Puppeter {
             pid,
@@ -518,6 +525,7 @@ impl MasterOfPuppets {
         }
     }
 
+    #[must_use]
     pub fn get_resource<T>(&self) -> Option<T>
     where
         T: Send + Sync + Clone + 'static,
@@ -544,6 +552,7 @@ impl MasterOfPuppets {
             .map(f)
     }
 
+    #[must_use]
     pub fn expect_resource<T>(&self) -> T
     where
         T: Send + Sync + Clone + 'static,
@@ -584,7 +593,9 @@ pub(crate) async fn run_puppet_loop<P>(
                 match res {
                     Some(mut service_packet) => {
                         if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                            service_packet.handle_command(&mut puppet, &mut puppeter).await;
+                            if let Err(err) = service_packet.handle_command(&mut puppet, &mut puppeter).await {
+                                tracing::error!(puppet = %puppeter.pid,  "Failed to handle command: {}", err);
+                            }
                         } else {
                             tracing::debug!(puppet = %puppeter.pid,  "Ignoring command due to non-Active puppet status");
                             let error_response = PuppetCannotHandleMessage::new(puppeter.pid, *puppet_status.borrow()).into();
@@ -601,8 +612,9 @@ pub(crate) async fn run_puppet_loop<P>(
                 match res {
                     Some(mut envelope) => {
                         if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                            // TODO: Handle error
-                            envelope.handle_message(&mut puppet, &mut puppeter).await;
+                            if let Err(err) = envelope.handle_message(&mut puppet, &mut puppeter).await {
+                                panic!("Failed to handle message: {}", err);
+                            }
                         } else {
                             let status = *puppet_status.borrow();
                             tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
@@ -619,6 +631,7 @@ pub(crate) async fn run_puppet_loop<P>(
     }
 }
 
+#[allow(unused_variables, clippy::unwrap_used)]
 #[cfg(test)]
 mod tests {
 
@@ -860,9 +873,9 @@ mod tests {
     async fn test_get_puppets_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = register_puppet::<MasterActor, MasterActor>(&mop);
-        assert!(res.is_ok());
+        res.unwrap();
         let res = register_puppet::<MasterActor, PuppetActor>(&mop);
-        assert!(res.is_ok());
+        res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
         let puppets = mop.get_puppets_by_pid(master_pid).unwrap();
@@ -874,9 +887,9 @@ mod tests {
     async fn test_detach_puppet_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = register_puppet::<MasterActor, MasterActor>(&mop);
-        assert!(res.is_ok());
+        res.unwrap();
         let res = register_puppet::<MasterActor, PuppetActor>(&mop);
-        assert!(res.is_ok());
+        res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
         assert!(mop.detach_puppet_by_pid(master_pid, puppet_pid).is_ok());
@@ -888,9 +901,9 @@ mod tests {
     async fn test_delete_puppet_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = register_puppet::<MasterActor, MasterActor>(&mop);
-        assert!(res.is_ok());
+        res.unwrap();
         let res = register_puppet::<MasterActor, PuppetActor>(&mop);
-        assert!(res.is_ok());
+        res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
         assert!(mop.delete_puppet_by_pid(master_pid, puppet_pid).is_ok());
@@ -904,11 +917,11 @@ mod tests {
         let res = mop
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
-        assert!(res.is_ok());
+        res.unwrap();
         let res = mop
             .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
-        assert!(res.is_err());
+        res.unwrap_err();
     }
 
     #[tokio::test]
@@ -917,12 +930,12 @@ mod tests {
         let res = mop
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
-        assert!(res.is_ok());
+        res.unwrap();
 
         let res = mop
             .send::<PuppetActor, PuppetMessage>(PuppetMessage {})
             .await;
-        assert!(res.is_ok());
+        res.unwrap();
 
         let res = mop
             .send::<MasterActor, MasterMessage>(MasterMessage {})
@@ -936,12 +949,12 @@ mod tests {
         let res = mop
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
-        assert!(res.is_ok());
+        res.unwrap();
 
         let res = mop
             .ask::<PuppetActor, PuppetMessage>(PuppetMessage {})
             .await;
-        assert!(res.is_ok());
+        res.unwrap();
 
         let res = mop
             .ask::<MasterActor, MasterMessage>(MasterMessage {})
@@ -981,8 +994,8 @@ mod tests {
             .send_command_by_pid(puppet_pid, puppet_pid, ServiceCommand::Stop)
             .await;
         assert!(res.is_ok());
-        let status = mop.get_puppet_status_by_pid(puppet_pid).unwrap();
-        assert_eq!(status, LifecycleStatus::Inactive);
+        let status = mop.get_puppet_status_by_pid(puppet_pid);
+        assert_eq!(status, Some(LifecycleStatus::Inactive));
     }
 
     #[tokio::test]

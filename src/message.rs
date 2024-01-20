@@ -18,7 +18,11 @@ pub trait Envelope<P>: Send
 where
     P: Lifecycle,
 {
-    async fn handle_message(&mut self, puppet: &mut P, puppeter: &mut Puppeter);
+    async fn handle_message(
+        &mut self,
+        puppet: &mut P,
+        puppeter: &mut Puppeter,
+    ) -> Result<(), CriticalError>;
     async fn reply_error(&mut self, err: PuppetError);
 }
 
@@ -65,10 +69,20 @@ where
     P: Handler<E>,
     E: Message + 'static,
 {
-    async fn handle_message(&mut self, puppet: &mut P, puppeter: &mut Puppeter) {
-        let msg = self.message.take().unwrap();
-        let reply_address = self.reply_address.take();
-        <P as Handler<E>>::Executor::execute(puppet, puppeter, msg, reply_address).await;
+    async fn handle_message(
+        &mut self,
+        puppet: &mut P,
+        puppeter: &mut Puppeter,
+    ) -> Result<(), CriticalError> {
+        if let Some(msg) = self.message.take() {
+            let reply_address = self.reply_address.take();
+            <P as Handler<E>>::Executor::execute(puppet, puppeter, msg, reply_address).await
+        } else {
+            Err(CriticalError::new(
+                puppeter.pid,
+                "Packet has no message to handle",
+            ))
+        }
     }
     async fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
@@ -102,37 +116,39 @@ impl ServicePacket {
         }
     }
 
-    pub(crate) async fn handle_command<P>(&mut self, puppet: &mut P, puppeter: &mut Puppeter)
+    pub(crate) async fn handle_command<P>(
+        &mut self,
+        puppet: &mut P,
+        puppeter: &mut Puppeter,
+    ) -> Result<(), CriticalError>
     where
         P: Lifecycle,
     {
-        let cmd = self.cmd.take().unwrap();
-        let reply_address = self.reply_address.take();
+        let cmd = self
+            .cmd
+            .take()
+            .ok_or_else(|| CriticalError::new(puppeter.pid, "ServicePacket has no command"))?;
+
+        let reply_address = self.reply_address.take().ok_or_else(|| {
+            CriticalError::new(puppeter.pid, "ServicePacket has no reply address")
+        })?;
+
         let response = puppeter.handle_command(puppet, cmd).await;
-        if let Err(err) = &response {
-            match err {
-                // Do nothing
-                PuppetError::NonCritical(_) => {}
-                PuppetError::Critical(_) => {
-                    puppeter.report_failure(puppet, err.clone()).await;
-                }
-            }
+
+        if let Err(PuppetError::Critical(err)) = &response {
+            puppeter.report_failure(puppet, err.clone().into()).await?;
         }
-        if let Some(reply_address) = reply_address {
-            if reply_address.send(response).is_err() {
-                puppeter
-                    .report_failure(
-                        puppet,
-                        CriticalError::new(
-                            puppeter.pid,
-                            "Failed to send response over the oneshot channel",
-                        )
-                        .into(),
-                    )
-                    .await;
-            }
-        }
+
+        reply_address.send(response).map_err(|_err| {
+            CriticalError::new(
+                puppeter.pid,
+                "Failed to send response over the oneshot channel",
+            )
+        })?;
+
+        Ok(())
     }
+
     pub(crate) async fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
             let _ = reply_address.send(Err(err));
