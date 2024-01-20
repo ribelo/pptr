@@ -27,15 +27,9 @@ impl PuppetDoesNotExistError {
     }
 }
 
-impl From<PuppetDoesNotExistError> for CriticalError {
-    fn from(value: PuppetDoesNotExistError) -> Self {
-        Self::new(value.puppet, value.to_string())
-    }
-}
-
 impl From<PuppetDoesNotExistError> for PuppetError {
     fn from(value: PuppetDoesNotExistError) -> Self {
-        CriticalError::from(value).into()
+        Self::critical(value.puppet, value)
     }
 }
 
@@ -51,7 +45,7 @@ pub struct PuppetAlreadyExist {
 
 impl From<PuppetAlreadyExist> for PuppetError {
     fn from(value: PuppetAlreadyExist) -> Self {
-        CriticalError::new(value.puppet, value.to_string()).into()
+        Self::critical(value.puppet, value.to_string())
     }
 }
 
@@ -118,15 +112,9 @@ impl PermissionDeniedError {
     }
 }
 
-impl From<PermissionDeniedError> for CriticalError {
-    fn from(value: PermissionDeniedError) -> Self {
-        Self::new(value.puppet, value.to_string())
-    }
-}
-
 impl From<PermissionDeniedError> for PuppetError {
     fn from(value: PermissionDeniedError) -> Self {
-        CriticalError::from(value).into()
+        Self::critical(value.puppet, value)
     }
 }
 
@@ -139,7 +127,7 @@ pub struct PuppetCannotHandleMessage {
 
 impl From<PuppetCannotHandleMessage> for PuppetError {
     fn from(value: PuppetCannotHandleMessage) -> Self {
-        NonCriticalError::new(value.puppet, value.to_string()).into()
+        Self::non_critical(value.puppet, value.to_string())
     }
 }
 
@@ -166,41 +154,11 @@ pub struct NonCriticalError {
     pub message: String,
 }
 
-impl NonCriticalError {
-    pub fn new(puppet: Pid, message: impl ToString) -> Self {
-        Self {
-            puppet,
-            message: message.to_string(),
-        }
-    }
-    pub fn from_type<P>(message: impl ToString) -> Self
-    where
-        P: Lifecycle,
-    {
-        Self::new(Pid::new::<P>(), message)
-    }
-}
-
 #[derive(Error, Debug, Clone)]
 #[error("Critical error occurred in puppet {puppet}: '{message}'. Supervisor will be notified.")]
 pub struct CriticalError {
     pub puppet: Pid,
     pub message: String,
-}
-
-impl CriticalError {
-    pub fn new(puppet: Pid, message: impl ToString) -> Self {
-        Self {
-            puppet,
-            message: message.to_string(),
-        }
-    }
-    pub fn from_type<P>(message: impl ToString) -> Self
-    where
-        P: Lifecycle,
-    {
-        Self::new(Pid::new::<P>(), message)
-    }
 }
 
 #[derive(Error, Debug, Clone)]
@@ -213,10 +171,18 @@ pub enum PuppetError {
 
 impl PuppetError {
     pub fn non_critical(puppet: Pid, message: impl ToString) -> Self {
-        NonCriticalError::new(puppet, message).into()
+        NonCriticalError {
+            puppet,
+            message: message.to_string(),
+        }
+        .into()
     }
     pub fn critical(puppet: Pid, message: impl ToString) -> Self {
-        CriticalError::new(puppet, message).into()
+        CriticalError {
+            puppet,
+            message: message.to_string(),
+        }
+        .into()
     }
 }
 
@@ -288,10 +254,10 @@ pub enum PostmanError {
 impl From<PostmanError> for PuppetError {
     fn from(err: PostmanError) -> Self {
         match err {
-            PostmanError::SendError { puppet } => CriticalError::new(puppet, err).into(),
-            PostmanError::ReceiveError { puppet } => CriticalError::new(puppet, err).into(),
-            PostmanError::ResponseReceiveError { puppet } => CriticalError::new(puppet, err).into(),
-            PostmanError::ResponseTimeout { puppet } => CriticalError::new(puppet, err).into(),
+            PostmanError::SendError { puppet } => Self::critical(puppet, err),
+            PostmanError::ReceiveError { puppet } => Self::critical(puppet, err),
+            PostmanError::ResponseReceiveError { puppet } => Self::critical(puppet, err),
+            PostmanError::ResponseTimeout { puppet } => Self::critical(puppet, err),
             PostmanError::PuppetError(err) => err,
         }
     }

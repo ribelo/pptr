@@ -11,15 +11,14 @@ use crate::{
     address::Address,
     errors::{
         PermissionDeniedError, PuppetAlreadyExist, PuppetCannotHandleMessage,
-        PuppetDoesNotExistError, PuppetError, PuppetOperationError, PuppetRegisterError,
-        PuppetSendCommandError, PuppetSendMessageError, ResourceAlreadyExist,
+        PuppetDoesNotExistError, PuppetError, PuppetOperationError, PuppetSendCommandError,
+        PuppetSendMessageError, ResourceAlreadyExist,
     },
     message::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
     },
     pid::{Id, Pid},
-    prelude::CriticalError,
     puppet::{
         Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, Puppeter, ResponseFor,
     },
@@ -56,7 +55,7 @@ impl MasterOfPuppets {
         service_postman: ServicePostman,
         status_tx: watch::Sender<LifecycleStatus>,
         status_rx: watch::Receiver<LifecycleStatus>,
-    ) -> Result<(), PuppetRegisterError>
+    ) -> Result<(), PuppetError>
     where
         M: Lifecycle,
         P: Lifecycle,
@@ -73,7 +72,7 @@ impl MasterOfPuppets {
         service_postman: ServicePostman,
         status_tx: watch::Sender<LifecycleStatus>,
         status_rx: watch::Receiver<LifecycleStatus>,
-    ) -> Result<(), PuppetRegisterError>
+    ) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -459,7 +458,10 @@ impl MasterOfPuppets {
 
         let mut builder = builder.into();
         let Some(mut puppet) = builder.puppet.take() else {
-            return Err(CriticalError::new(puppet_pid, "PuppetBuilder has no puppet").into());
+            return Err(PuppetError::critical(
+                puppet_pid,
+                "PuppetBuilder has no puppet",
+            ));
         };
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
@@ -477,7 +479,10 @@ impl MasterOfPuppets {
             status_rx.clone(),
         )?;
         let Some(retry_config) = builder.retry_config.take() else {
-            return Err(CriticalError::new(puppet_pid, "PuppetBuilder has no RetryConfig").into());
+            return Err(PuppetError::critical(
+                puppet_pid,
+                "PuppetBuilder has no RetryConfig",
+            ));
         };
 
         let mut puppeter = Puppeter {
@@ -701,7 +706,7 @@ mod tests {
         }
     }
 
-    pub fn register_puppet<M, P>(mop: &MasterOfPuppets) -> Result<(), PuppetRegisterError>
+    pub fn register_puppet<M, P>(mop: &MasterOfPuppets) -> Result<(), PuppetError>
     where
         M: Lifecycle,
         P: Lifecycle,

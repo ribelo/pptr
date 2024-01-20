@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    errors::{CriticalError, PostmanError, PuppetError},
+    errors::{PostmanError, PuppetError},
     executor::Executor,
     pid::Pid,
     puppet::{Handler, Lifecycle, Puppeter, ResponseFor},
@@ -22,7 +22,7 @@ where
         &mut self,
         puppet: &mut P,
         puppeter: &mut Puppeter,
-    ) -> Result<(), CriticalError>;
+    ) -> Result<(), PuppetError>;
     async fn reply_error(&mut self, err: PuppetError);
 }
 
@@ -73,12 +73,12 @@ where
         &mut self,
         puppet: &mut P,
         puppeter: &mut Puppeter,
-    ) -> Result<(), CriticalError> {
+    ) -> Result<(), PuppetError> {
         if let Some(msg) = self.message.take() {
             let reply_address = self.reply_address.take();
             <P as Handler<E>>::Executor::execute(puppet, puppeter, msg, reply_address).await
         } else {
-            Err(CriticalError::new(
+            Err(PuppetError::critical(
                 puppeter.pid,
                 "Packet has no message to handle",
             ))
@@ -120,17 +120,17 @@ impl ServicePacket {
         &mut self,
         puppet: &mut P,
         puppeter: &mut Puppeter,
-    ) -> Result<(), CriticalError>
+    ) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
         let cmd = self
             .cmd
             .take()
-            .ok_or_else(|| CriticalError::new(puppeter.pid, "ServicePacket has no command"))?;
+            .ok_or_else(|| PuppetError::critical(puppeter.pid, "ServicePacket has no command"))?;
 
         let reply_address = self.reply_address.take().ok_or_else(|| {
-            CriticalError::new(puppeter.pid, "ServicePacket has no reply address")
+            PuppetError::critical(puppeter.pid, "ServicePacket has no reply address")
         })?;
 
         let response = puppeter.handle_command(puppet, cmd).await;
@@ -140,7 +140,7 @@ impl ServicePacket {
         }
 
         reply_address.send(response).map_err(|_err| {
-            CriticalError::new(
+            PuppetError::critical(
                 puppeter.pid,
                 "Failed to send response over the oneshot channel",
             )

@@ -15,7 +15,6 @@ use crate::{
     master_of_puppets::MasterOfPuppets,
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
-    prelude::NonCriticalError,
     supervision::{RetryConfig, SupervisionStrategy},
 };
 
@@ -117,7 +116,7 @@ impl Puppeter {
         &mut self,
         puppet: &mut P,
         is_restarting: bool,
-    ) -> Result<(), CriticalError>
+    ) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -160,10 +159,12 @@ impl Puppeter {
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
                             let error =
-                                CriticalError::new(self.pid, "Max retry reached during start");
-                            // If the maximum retry attempts are reached during `on_start`
-                            // ReportFailure.
-
+                                PuppetError::critical(self.pid, "Max retry reached during start");
+                            // If the maximum retry attempts are reached during `start_all_puppets`
+                            // Mark the tree as poisoned.
+                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                                return Err(PuppetError::critical(self.pid, err));
+                            }
                             // And return a fatal error indicating the failure.
                             return Err(error);
                         } else {
@@ -188,13 +189,11 @@ impl Puppeter {
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
                             let error =
-                                CriticalError::new(self.pid, "Max retry reached during start");
+                                PuppetError::critical(self.pid, "Max retry reached during start");
                             // If the maximum retry attempts are reached during `start_all_puppets`
                             // Mark the tree as poisoned.
-                            if let Err(err) =
-                                self.report_failure(puppet, error.clone().into()).await
-                            {
-                                return Err(CriticalError::new(self.pid, err));
+                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                                return Err(PuppetError::critical(self.pid, err));
                             }
                             // And return a fatal error indicating the failure.
                             return Err(error);
@@ -218,7 +217,7 @@ impl Puppeter {
         Ok(())
     }
 
-    async fn stop<P>(&mut self, puppet: &mut P, is_restarting: bool) -> Result<(), CriticalError>
+    async fn stop<P>(&mut self, puppet: &mut P, is_restarting: bool) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -254,13 +253,11 @@ impl Puppeter {
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
                             let error =
-                                CriticalError::new(self.pid, "Max retry reached during stop");
+                                PuppetError::critical(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `stop_all_puppets`,
                             // Mark tree as poisoned.
-                            if let Err(err) =
-                                self.report_failure(puppet, error.clone().into()).await
-                            {
-                                return Err(CriticalError::new(self.pid, err));
+                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                                return Err(PuppetError::critical(self.pid, err));
                             };
                             // And return a fatal error indicating the failure.
                             return Err(error);
@@ -285,13 +282,11 @@ impl Puppeter {
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
                             let error =
-                                CriticalError::new(self.pid, "Max retry reached during stop");
+                                PuppetError::critical(self.pid, "Max retry reached during stop");
                             // If the maximum retry attempts are reached during `on_stop`,
                             // Mark tree as poisoned.
-                            if let Err(err) =
-                                self.report_failure(puppet, error.clone().into()).await
-                            {
-                                return Err(CriticalError::new(self.pid, err));
+                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                                return Err(PuppetError::critical(self.pid, err));
                             };
                             // And return a fatal error indicating the failure.
                             return Err(error);
@@ -315,7 +310,7 @@ impl Puppeter {
         Ok(())
     }
 
-    async fn restart<P>(&mut self, puppet: &mut P) -> Result<(), CriticalError>
+    async fn restart<P>(&mut self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -325,7 +320,7 @@ impl Puppeter {
         self.start(puppet, true).await?;
         Ok(())
     }
-    pub(crate) async fn fail<P>(&mut self, puppet: &mut P) -> Result<(), CriticalError>
+    pub(crate) async fn fail<P>(&mut self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -425,7 +420,7 @@ impl Puppeter {
         &mut self,
         puppet: &mut P,
         error: PuppetError,
-    ) -> Result<(), CriticalError>
+    ) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -457,7 +452,7 @@ impl Puppeter {
                     },
                 )
                 .await
-                .map_err(|err| CriticalError::new(self.pid, err))
+                .map_err(|err| PuppetError::critical(self.pid, err))
         } else {
             Err(PuppetDoesNotExistError::new(master_pid).into())
         }
@@ -649,7 +644,7 @@ impl Puppeter {
         Ok(())
     }
 
-    pub(crate) async fn fail_all_puppets<P>(&mut self, puppet: &mut P) -> Result<(), CriticalError>
+    pub(crate) async fn fail_all_puppets<P>(&mut self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -660,26 +655,12 @@ impl Puppeter {
                 // Attempt to send the stop command to the current puppet.
                 if let Err(error) = self.send_command_by_pid(*pid, ServiceCommand::Fail).await {
                     if let Err(err) = self.report_failure(puppet, error.into()).await {
-                        CriticalError::new(self.pid, err);
+                        PuppetError::critical(self.pid, err);
                     }
                 }
             }
         };
         Ok(())
-    }
-
-    pub fn non_critical_error(&self, msg: impl ToString) -> NonCriticalError {
-        NonCriticalError {
-            puppet: self.pid,
-            message: msg.to_string(),
-        }
-    }
-
-    pub fn critical_error(&self, msg: impl ToString) -> CriticalError {
-        CriticalError {
-            puppet: self.pid,
-            message: msg.to_string(),
-        }
     }
 }
 

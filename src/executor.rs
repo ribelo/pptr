@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tokio::sync::oneshot;
 
 use crate::{
-    errors::{CriticalError, PuppetError},
+    errors::PuppetError,
     message::Message,
     puppet::{Handler, Puppeter},
 };
@@ -17,7 +17,7 @@ where
         puppeter: &mut Puppeter,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
-    ) -> Result<(), CriticalError>
+    ) -> Result<(), PuppetError>
     where
         P: Handler<E>;
 }
@@ -35,7 +35,7 @@ where
         puppeter: &mut Puppeter,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
-    ) -> Result<(), CriticalError>
+    ) -> Result<(), PuppetError>
     where
         P: Handler<E>,
     {
@@ -49,8 +49,10 @@ where
                 return puppeter
                     .report_failure(
                         puppet,
-                        CriticalError::new(pid, "Failed to send response over the oneshot channel")
-                            .into(),
+                        PuppetError::critical(
+                            pid,
+                            "Failed to send response over the oneshot channel",
+                        ),
                     )
                     .await;
             }
@@ -70,7 +72,7 @@ where
         puppeter: &mut Puppeter,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
-    ) -> Result<(), CriticalError>
+    ) -> Result<(), PuppetError>
     where
         P: Handler<E> + Clone,
     {
