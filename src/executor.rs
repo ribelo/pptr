@@ -67,7 +67,7 @@ where
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) where
-        P: Handler<E>,
+        P: Handler<E> + Clone,
     {
         let cloned_puppet = puppet.clone();
         let cloned_puppeter = puppeter.clone();

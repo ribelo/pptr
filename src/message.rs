@@ -11,6 +11,7 @@ use crate::{
 };
 
 pub trait Message: fmt::Debug + Send + 'static {}
+impl<T> Message for T where T: fmt::Debug + Send + 'static {}
 
 #[async_trait]
 pub trait Envelope<P>: Send
@@ -39,7 +40,7 @@ where
     P: Handler<E>,
     E: Message,
 {
-    pub fn without_reply(message: E) -> Self {
+    pub const fn without_reply(message: E) -> Self {
         Self {
             message: Some(message),
             reply_address: None,
@@ -82,6 +83,7 @@ pub struct ServicePacket {
 }
 
 impl ServicePacket {
+    #[must_use]
     pub fn with_reply(
         cmd: ServiceCommand,
         reply_address: oneshot::Sender<Result<(), PuppetError>>,
@@ -92,7 +94,8 @@ impl ServicePacket {
         }
     }
 
-    pub fn without_reply(cmd: ServiceCommand) -> Self {
+    #[must_use]
+    pub const fn without_reply(cmd: ServiceCommand) -> Self {
         Self {
             cmd: Some(cmd),
             reply_address: None,
@@ -152,8 +155,6 @@ pub enum ServiceCommand {
     Fail,
 }
 
-impl Message for ServiceCommand {}
-
 #[derive(Debug)]
 pub struct Postman<P>
 where
@@ -177,6 +178,7 @@ impl<P> Postman<P>
 where
     P: Lifecycle,
 {
+    #[must_use]
     pub fn new(tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>) -> Self {
         Self { tx }
     }
@@ -188,7 +190,7 @@ where
         E: Message + 'static,
     {
         let packet = Packet::<P, E>::without_reply(message);
-        self.tx.send(Box::new(packet)).await.map_err(|_| {
+        self.tx.send(Box::new(packet)).await.map_err(|_e| {
             PostmanError::SendError {
                 puppet: Pid::new::<P>(),
             }
@@ -210,39 +212,39 @@ where
             tokio::sync::oneshot::channel::<Result<ResponseFor<P, E>, PuppetError>>();
 
         let packet = Packet::<P, E>::with_reply(message, res_tx);
-        self.tx.send(Box::new(packet)).await.map_err(|_| {
+        self.tx.send(Box::new(packet)).await.map_err(|_e| {
             PostmanError::SendError {
                 puppet: Pid::new::<P>(),
             }
         })?;
 
         if let Some(duration) = duration {
-            match tokio::time::timeout(duration, res_rx).await {
-                Ok(inner_res) => {
-                    match inner_res {
-                        Ok(res) => res.map_err(PostmanError::from),
-                        Err(_) => {
+            (tokio::time::timeout(duration, res_rx).await).map_or_else(
+                |_| {
+                    Err(PostmanError::ResponseReceiveError {
+                        puppet: Pid::new::<P>(),
+                    })
+                },
+                |inner_res| {
+                    inner_res.map_or_else(
+                        |_| {
                             Err(PostmanError::ResponseReceiveError {
                                 puppet: Pid::new::<P>(),
                             })
-                        }
-                    }
-                }
-                Err(_) => {
-                    Err(PostmanError::ResponseReceiveError {
-                        puppet: Pid::new::<P>(),
-                    })
-                }
-            }
+                        },
+                        |res| res.map_err(PostmanError::from),
+                    )
+                },
+            )
         } else {
-            match res_rx.await {
-                Ok(res) => res.map_err(PostmanError::from),
-                Err(_) => {
+            (res_rx.await).map_or_else(
+                |_| {
                     Err(PostmanError::ResponseReceiveError {
                         puppet: Pid::new::<P>(),
                     })
-                }
-            }
+                },
+                |res| res.map_err(PostmanError::from),
+            )
         }
     }
 }
@@ -253,7 +255,8 @@ pub struct ServicePostman {
 }
 
 impl ServicePostman {
-    pub fn new(tx: tokio::sync::mpsc::Sender<ServicePacket>) -> Self {
+    #[must_use]
+    pub const fn new(tx: tokio::sync::mpsc::Sender<ServicePacket>) -> Self {
         Self { tx }
     }
 
@@ -262,7 +265,7 @@ impl ServicePostman {
         self.tx
             .send(packet)
             .await
-            .map_err(|_| PostmanError::SendError { puppet })
+            .map_err(|_e| PostmanError::SendError { puppet })
     }
 
     pub async fn send_and_await_response(
@@ -276,23 +279,21 @@ impl ServicePostman {
         self.tx
             .send(packet)
             .await
-            .map_err(|_| PostmanError::SendError { puppet })?;
+            .map_err(|_e| PostmanError::SendError { puppet })?;
 
         if let Some(duration) = duration {
-            match tokio::time::timeout(duration, res_rx).await {
-                Ok(inner_res) => {
-                    match inner_res {
-                        Ok(res) => res.map_err(|e| e.into()),
-                        Err(_) => Err(PostmanError::ResponseReceiveError { puppet }),
-                    }
-                }
-                Err(_) => Err(PostmanError::ResponseReceiveError { puppet }),
-            }
+            (tokio::time::timeout(duration, res_rx).await).map_or(
+                Err(PostmanError::ResponseReceiveError { puppet }),
+                |inner_res| {
+                    inner_res.map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
+                        res.map_err(|e| e.into())
+                    })
+                },
+            )
         } else {
-            match res_rx.await {
-                Ok(res) => res.map_err(|e| e.into()),
-                Err(_) => Err(PostmanError::ResponseReceiveError { puppet }),
-            }
+            (res_rx.await).map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
+                res.map_err(|e| e.into())
+            })
         }
     }
 }
@@ -331,7 +332,7 @@ pub(crate) struct ServiceMailbox {
 }
 
 impl ServiceMailbox {
-    pub fn new(rx: tokio::sync::mpsc::Receiver<ServicePacket>) -> Self {
+    pub const fn new(rx: tokio::sync::mpsc::Receiver<ServicePacket>) -> Self {
         Self { rx }
     }
     pub async fn recv(&mut self) -> Option<ServicePacket> {

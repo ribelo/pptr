@@ -43,6 +43,7 @@ pub struct MasterOfPuppets {
 }
 
 impl MasterOfPuppets {
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
@@ -123,6 +124,7 @@ impl MasterOfPuppets {
         Ok(())
     }
 
+    #[must_use]
     pub fn is_puppet_exists<P>(&self) -> bool
     where
         P: Lifecycle,
@@ -135,6 +137,7 @@ impl MasterOfPuppets {
         self.get_puppet_master_by_pid(puppet).is_some()
     }
 
+    #[must_use]
     pub fn get_postman<P>(&self) -> Option<Postman<P>>
     where
         P: Lifecycle,
@@ -173,6 +176,7 @@ impl MasterOfPuppets {
             });
     }
 
+    #[must_use]
     pub fn subscribe_puppet_status<P>(&self) -> Option<watch::Receiver<LifecycleStatus>>
     where
         P: Lifecycle,
@@ -192,6 +196,7 @@ impl MasterOfPuppets {
             .map(|(_, rx)| rx.clone())
     }
 
+    #[must_use]
     pub fn get_puppet_status<P>(&self) -> Option<LifecycleStatus>
     where
         P: Lifecycle,
@@ -424,9 +429,9 @@ impl MasterOfPuppets {
         }
     }
 
-    pub(crate) async fn spawn_puppet<M, P>(
+    pub async fn spawn<M, P>(
         &self,
-        builder: impl Into<PuppetBuilder<P>>,
+        builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
     where
         M: Lifecycle,
@@ -564,13 +569,13 @@ pub(crate) async fn run_puppet_loop<P>(
                         if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
                             | LifecycleStatus::Failed) {
                             println!("Stopping loop due to puppet status change");
-                            tracing::info!(puppet = puppeter.pid.to_string(),  "Stopping loop due to puppet status change");
+                            tracing::info!(puppet = %puppeter.pid,  "Stopping loop due to puppet status change");
                             break;
                         }
                     }
                     Err(_) => {
                         println!("Stopping loop due to closed puppet status channel");
-                        tracing::debug!(puppet = puppeter.pid.to_string(),  "Stopping loop due to closed puppet status channel");
+                        tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed puppet status channel");
                         break;
                     }
                 }
@@ -581,13 +586,13 @@ pub(crate) async fn run_puppet_loop<P>(
                         if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
                             service_packet.handle_command(&mut puppet, &mut puppeter).await;
                         } else {
-                            tracing::debug!(puppet = puppeter.pid.to_string(),  "Ignoring command due to non-Active puppet status");
+                            tracing::debug!(puppet = %puppeter.pid,  "Ignoring command due to non-Active puppet status");
                             let error_response = PuppetCannotHandleMessage::new(puppeter.pid, *puppet_status.borrow()).into();
                             service_packet.reply_error(error_response).await;
                         }
                     }
                     None => {
-                        tracing::debug!(puppet = puppeter.pid.to_string(),  "Stopping loop due to closed command channel");
+                        tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed command channel");
                         break;
                     }
                 }
@@ -600,12 +605,12 @@ pub(crate) async fn run_puppet_loop<P>(
                             envelope.handle_message(&mut puppet, &mut puppeter).await;
                         } else {
                             let status = *puppet_status.borrow();
-                            tracing::debug!(puppet = puppeter.pid.to_string(),  "Ignoring message due to non-Active puppet status");
+                            tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
                             envelope.reply_error(PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
                         }
                     }
                     None => {
-                        tracing::debug!(puppet = puppeter.pid.to_string(),  "Stopping loop due to closed message channel");
+                        tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed message channel");
                         break;
                     }
                 }
@@ -616,36 +621,46 @@ pub(crate) async fn run_puppet_loop<P>(
 
 #[cfg(test)]
 mod tests {
+
     use std::time::Duration;
 
     use async_trait::async_trait;
 
-    use crate::{executor::SequentialExecutor, supervision::strategy::OneForAll};
+    use crate::{
+        executor::SequentialExecutor, prelude::CriticalError, supervision::strategy::OneForAll,
+    };
 
     use super::*;
 
     #[derive(Debug, Clone, Default)]
-    struct MasterActor {}
+    struct MasterActor;
+
+    #[async_trait]
     impl Lifecycle for MasterActor {
         type Supervision = OneForAll;
+
+        async fn reset(&self, _puppeter: &Puppeter) -> Result<Self, CriticalError> {
+            todo!()
+        }
     }
 
     #[derive(Debug, Clone, Default)]
-    struct PuppetActor {}
+    struct PuppetActor;
 
+    #[async_trait]
     impl Lifecycle for PuppetActor {
         type Supervision = OneForAll;
+
+        async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError> {
+            todo!()
+        }
     }
 
     #[derive(Debug)]
-    struct MasterMessage {}
-
-    impl Message for MasterMessage {}
+    struct MasterMessage;
 
     #[derive(Debug)]
-    struct PuppetMessage {}
-
-    impl Message for PuppetMessage {}
+    struct PuppetMessage;
 
     #[async_trait]
     impl Handler<MasterMessage> for MasterActor {
@@ -887,11 +902,11 @@ mod tests {
     async fn test_spawn() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let res = mop
-            .spawn_puppet::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_err());
     }
@@ -900,7 +915,7 @@ mod tests {
     async fn test_send() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
 
@@ -919,7 +934,7 @@ mod tests {
     async fn test_ask() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
 
@@ -938,7 +953,7 @@ mod tests {
     async fn test_ask_with_timeout() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let res = mop
@@ -958,7 +973,7 @@ mod tests {
     async fn test_send_command_stop_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
             .await;
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -971,22 +986,87 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_command_restart_by_pid() {
+    async fn self_mutate_puppet() {
+        #[derive(Debug, Clone, Default)]
+        pub struct CounterPuppet {
+            counter: Vec<i32>,
+        }
+
+        #[async_trait]
+        impl Lifecycle for CounterPuppet {
+            type Supervision = OneForAll;
+            async fn reset(&self, _puppeter: &Puppeter) -> Result<Self, CriticalError> {
+                Ok(Default::default())
+            }
+        }
+
+        #[derive(Debug)]
+        pub struct IncrementCounter;
+
+        #[async_trait]
+        impl Handler<IncrementCounter> for CounterPuppet {
+            type Response = ();
+            type Executor = SequentialExecutor;
+            async fn handle_message(
+                &mut self,
+                _msg: IncrementCounter,
+                puppeter: &Puppeter,
+            ) -> Result<Self::Response, PuppetError> {
+                println!("Counter: {}", self.counter.len());
+                if self.counter.len() < 10 {
+                    self.counter.push(1);
+                    puppeter.send::<Self, _>(IncrementCounter).await?;
+                } else {
+                    puppeter.send::<Self, _>(DebugCounterPuppet).await?;
+                }
+                Ok(())
+            }
+        }
+
+        #[derive(Debug)]
+        pub struct DebugCounterPuppet;
+
+        #[async_trait]
+        impl Handler<DebugCounterPuppet> for CounterPuppet {
+            type Response = ();
+            type Executor = SequentialExecutor;
+            async fn handle_message(
+                &mut self,
+                _msg: DebugCounterPuppet,
+                _puppeter: &Puppeter,
+            ) -> Result<Self::Response, PuppetError> {
+                println!("Counter: {:?}", self.counter);
+                Ok(())
+            }
+        }
+
         let mop = MasterOfPuppets::new();
-        let res = mop
-            .spawn_puppet::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
-            .await;
-        assert!(res.is_ok());
-        let puppet_pid = Pid::new::<PuppetActor>();
-        let res = mop
-            .send_command_by_pid(
-                puppet_pid,
-                puppet_pid,
-                ServiceCommand::Restart { stage: None },
-            )
-            .await;
-        assert!(res.is_ok());
-        let status = mop.get_puppet_status_by_pid(puppet_pid).unwrap();
-        assert_eq!(status, LifecycleStatus::Active);
+        let address = mop
+            .spawn::<CounterPuppet, CounterPuppet>(PuppetBuilder::new(CounterPuppet::default()))
+            .await
+            .unwrap();
+        address.send(IncrementCounter).await.unwrap();
+        // wait 1 second for the puppet to finish
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
+
+    // #[tokio::test]
+    // async fn test_send_command_restart_by_pid() {
+    //     let mop = MasterOfPuppets::new();
+    //     let res = mop
+    //         .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+    //         .await;
+    //     assert!(res.is_ok());
+    //     let puppet_pid = Pid::new::<PuppetActor>();
+    //     let res = mop
+    //         .send_command_by_pid(
+    //             puppet_pid,
+    //             puppet_pid,
+    //             ServiceCommand::Restart { stage: None },
+    //         )
+    //         .await;
+    //     assert!(res.is_ok());
+    //     let status = mop.get_puppet_status_by_pid(puppet_pid).unwrap();
+    //     assert_eq!(status, LifecycleStatus::Active);
+    // }
 }

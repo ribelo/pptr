@@ -38,25 +38,30 @@ pub struct RetryConfigBuilder {
 }
 
 impl RetryConfigBuilder {
+    #[must_use]
     pub fn new() -> Self {
         Default::default()
     }
 
-    pub fn with_max_retries(mut self, retries: usize) -> Self {
+    #[must_use]
+    pub const fn with_max_retries(mut self, retries: usize) -> Self {
         self.max_retries = Some(retries);
         self
     }
 
-    pub fn within_duration(mut self, duration: Duration) -> Self {
+    #[must_use]
+    pub const fn within_duration(mut self, duration: Duration) -> Self {
         self.within_duration = Some(duration);
         self
     }
 
-    pub fn with_time_between(mut self, time: Duration) -> Self {
+    #[must_use]
+    pub const fn with_time_between(mut self, time: Duration) -> Self {
         self.with_time_between = Some(time);
         self
     }
 
+    #[must_use]
     pub fn build(self) -> RetryConfig {
         RetryConfig {
             max_retries: self.max_retries,
@@ -70,7 +75,7 @@ impl RetryConfigBuilder {
 
 impl Default for RetryConfig {
     fn default() -> Self {
-        RetryConfig {
+        Self {
             max_retries: None,
             within_duration: None,
             with_time_between: None,

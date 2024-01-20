@@ -21,14 +21,25 @@ where
     pub(crate) master_of_puppets: MasterOfPuppets,
 }
 
+impl<S: Lifecycle> fmt::Debug for Address<S> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Address")
+            .field("pid", &self.pid)
+            .field("status", &self.get_status())
+            .finish()
+    }
+}
+
 impl<S> Address<S>
 where
     S: Lifecycle,
 {
+    #[must_use]
     pub fn get_status(&self) -> LifecycleStatus {
         *self.status_rx.borrow()
     }
 
+    #[must_use]
     pub fn status_subscribe(&self) -> watch::Receiver<LifecycleStatus> {
         self.status_rx.clone()
     }
@@ -79,12 +90,12 @@ where
 
     pub async fn spawn<P>(
         &self,
-        builder: impl Into<PuppetBuilder<P>>,
+        builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
     {
-        self.master_of_puppets.spawn_puppet::<S, P>(builder).await
+        self.master_of_puppets.spawn::<S, P>(builder).await
     }
 }
 

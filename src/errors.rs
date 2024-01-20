@@ -14,9 +14,11 @@ pub struct PuppetDoesNotExistError {
 }
 
 impl PuppetDoesNotExistError {
-    pub fn new(puppet: Pid) -> Self {
+    #[must_use]
+    pub const fn new(puppet: Pid) -> Self {
         Self { puppet }
     }
+    #[must_use]
     pub fn from_type<P>() -> Self
     where
         P: Lifecycle,
@@ -27,7 +29,7 @@ impl PuppetDoesNotExistError {
 
 impl From<PuppetDoesNotExistError> for CriticalError {
     fn from(value: PuppetDoesNotExistError) -> Self {
-        CriticalError::new(value.puppet, value.to_string())
+        Self::new(value.puppet, value.to_string())
     }
 }
 
@@ -54,9 +56,11 @@ impl From<PuppetAlreadyExist> for PuppetError {
 }
 
 impl PuppetAlreadyExist {
-    pub fn new(puppet: Pid) -> Self {
+    #[must_use]
+    pub const fn new(puppet: Pid) -> Self {
         Self { puppet }
     }
+    #[must_use]
     pub fn from_type<P>() -> Self
     where
         P: Lifecycle,
@@ -85,13 +89,15 @@ impl fmt::Display for PermissionDeniedError {
 }
 
 impl PermissionDeniedError {
-    pub fn new(master: Pid, puppet: Pid) -> Self {
+    #[must_use]
+    pub const fn new(master: Pid, puppet: Pid) -> Self {
         Self {
             master,
             puppet,
             message: None,
         }
     }
+    #[must_use]
     pub fn from_type<M, P>() -> Self
     where
         M: Lifecycle,
@@ -104,16 +110,17 @@ impl PermissionDeniedError {
         self
     }
 
+    #[must_use]
     pub fn message_or_default(&self) -> String {
         self.message
             .clone()
-            .unwrap_or_else(|| "No message".to_string())
+            .unwrap_or_else(|| "No message".to_owned())
     }
 }
 
 impl From<PermissionDeniedError> for CriticalError {
     fn from(value: PermissionDeniedError) -> Self {
-        CriticalError::new(value.puppet, value.to_string())
+        Self::new(value.puppet, value.to_string())
     }
 }
 
@@ -137,9 +144,11 @@ impl From<PuppetCannotHandleMessage> for PuppetError {
 }
 
 impl PuppetCannotHandleMessage {
-    pub fn new(puppet: Pid, status: LifecycleStatus) -> Self {
+    #[must_use]
+    pub const fn new(puppet: Pid, status: LifecycleStatus) -> Self {
         Self { puppet, status }
     }
+    #[must_use]
     pub fn from_type<P>(status: LifecycleStatus) -> Self
     where
         P: Lifecycle,
@@ -233,6 +242,15 @@ pub enum PuppetSendMessageError {
     PostmanError(#[from] PostmanError),
 }
 
+impl From<PuppetSendMessageError> for PuppetError {
+    fn from(err: PuppetSendMessageError) -> Self {
+        match err {
+            PuppetSendMessageError::PuppetDosNotExist(err) => err.into(),
+            PuppetSendMessageError::PostmanError(err) => err.into(),
+        }
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum PuppetSendCommandError {
     #[error(transparent)]
@@ -244,7 +262,7 @@ pub enum PuppetSendCommandError {
 }
 
 impl From<PuppetSendCommandError> for PuppetError {
-    fn from(err: PuppetSendCommandError) -> PuppetError {
+    fn from(err: PuppetSendCommandError) -> Self {
         match err {
             PuppetSendCommandError::PuppetDosNotExist(err) => err.into(),
             PuppetSendCommandError::PermissionDenied(err) => err.into(),
@@ -268,7 +286,7 @@ pub enum PostmanError {
 }
 
 impl From<PostmanError> for PuppetError {
-    fn from(err: PostmanError) -> PuppetError {
+    fn from(err: PostmanError) -> Self {
         match err {
             PostmanError::SendError { puppet } => CriticalError::new(puppet, err).into(),
             PostmanError::ReceiveError { puppet } => CriticalError::new(puppet, err).into(),
@@ -288,7 +306,7 @@ pub enum PuppetRegisterError {
 }
 
 impl From<PuppetRegisterError> for PuppetError {
-    fn from(err: PuppetRegisterError) -> PuppetError {
+    fn from(err: PuppetRegisterError) -> Self {
         match err {
             PuppetRegisterError::PuppetDoesNotExist(err) => err.into(),
             PuppetRegisterError::PuppetAlreadyExist(err) => err.into(),

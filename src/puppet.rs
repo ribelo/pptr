@@ -3,6 +3,7 @@ use std::{any::type_name, num::NonZeroUsize};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use tokio::sync::watch;
+use tracing::debug;
 
 use crate::{
     address::Address,
@@ -14,13 +15,16 @@ use crate::{
     master_of_puppets::MasterOfPuppets,
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
+    prelude::NonCriticalError,
     supervision::{RetryConfig, SupervisionStrategy},
 };
 
 #[allow(unused_variables)]
 #[async_trait]
-pub trait Lifecycle: Send + Sync + Sized + Default + Clone + 'static {
+pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     type Supervision: SupervisionStrategy + Send + Sync;
+
+    async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError>;
 
     async fn on_init(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %type_name::<Self>(), "Initializing puppet");
@@ -37,8 +41,8 @@ pub trait Lifecycle: Send + Sync + Sized + Default + Clone + 'static {
     }
 }
 
-pub trait Puppet: Send + Sync + Default + Clone + Default + 'static {}
-impl<T> Puppet for T where T: Send + Sync + Default + Clone + Default + 'static {}
+pub trait Puppet: Send + Sync + Clone + 'static {}
+impl<T> Puppet for T where T: Send + Sync + Clone + 'static {}
 
 #[derive(Debug, Clone, Copy, strum::Display, PartialEq, Eq)]
 pub enum LifecycleStatus {
@@ -65,7 +69,6 @@ where
     pub puppet: Option<P>,
     pub messages_bufer_size: NonZeroUsize,
     pub commands_bufer_size: NonZeroUsize,
-    pub(crate) master_of_puppets: Option<MasterOfPuppets>,
     pub retry_config: Option<RetryConfig>,
 }
 
@@ -79,41 +82,33 @@ where
             puppet: Some(state),
             messages_bufer_size: NonZeroUsize::new(1024).unwrap(),
             commands_bufer_size: NonZeroUsize::new(16).unwrap(),
-            master_of_puppets: None,
             retry_config: Some(Default::default()),
         }
     }
 
-    pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
+    pub const fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.messages_bufer_size = size;
         self
     }
 
-    pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
+    pub const fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.commands_bufer_size = size;
         self
     }
 
-    pub fn with_post_office(mut self, post_office: &MasterOfPuppets) -> Self {
-        self.master_of_puppets = Some(post_office.clone());
-        self
-    }
-
-    pub async fn spawn(mut self) -> Result<Address<P>, PuppetError>
+    pub async fn spawn(self, mop: &MasterOfPuppets) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
     {
-        let master_of_puppets = self.master_of_puppets.take().unwrap_or_default();
-        master_of_puppets.spawn_puppet::<P, P>(self).await
+        mop.spawn::<P, P>(self).await
     }
 
-    pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
+    pub async fn spawn_link<M>(self, mop: &MasterOfPuppets) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
         M: Lifecycle,
     {
-        let master_of_puppets = self.master_of_puppets.take().unwrap_or_default();
-        master_of_puppets.spawn_puppet::<M, P>(self).await
+        mop.spawn::<M, P>(self).await
     }
 }
 
@@ -313,6 +308,8 @@ impl Puppeter {
         P: Lifecycle,
     {
         self.stop(puppet, true).await?;
+        // Reset state
+        *puppet = puppet.reset(self).await?;
         self.start(puppet, true).await?;
         Ok(())
     }
@@ -324,6 +321,7 @@ impl Puppeter {
         self.set_status(LifecycleStatus::Failed);
     }
 
+    #[must_use]
     pub fn is_puppet_exists<P>(&self) -> bool
     where
         P: Lifecycle,
@@ -331,6 +329,7 @@ impl Puppeter {
         self.master_of_puppets.is_puppet_exists::<P>()
     }
 
+    #[must_use]
     pub fn get_status<P>(&self) -> Option<LifecycleStatus>
     where
         P: Lifecycle,
@@ -343,6 +342,7 @@ impl Puppeter {
         self.master_of_puppets.set_status_by_pid(self.pid, status)
     }
 
+    #[must_use]
     pub fn has_puppet<M, P>(&self) -> Option<bool>
     where
         M: Lifecycle,
@@ -354,6 +354,7 @@ impl Puppeter {
             .puppet_has_puppet_by_pid(master_pid, puppet_pid)
     }
 
+    #[must_use]
     pub fn get_master<P>(&self) -> Option<Pid>
     where
         P: Lifecycle,
@@ -382,6 +383,7 @@ impl Puppeter {
             .detach_puppet_by_pid(self.pid, puppet_pid)
     }
 
+    #[must_use]
     pub fn has_permission<M, P>(&self) -> Option<bool>
     where
         M: Lifecycle,
@@ -395,7 +397,7 @@ impl Puppeter {
 
     pub async fn spawn<P>(
         &self,
-        builder: impl Into<PuppetBuilder<P>>,
+        builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
@@ -410,6 +412,11 @@ impl Puppeter {
     where
         P: Lifecycle,
     {
+        if matches!(error, PuppetError::NonCritical(_)) {
+            debug!(error = %error, "Non critical error reported");
+            return;
+        }
+
         let master_pid = self.get_master::<P>().expect("Master not found");
         let puppet_pid = self.pid;
 
@@ -423,7 +430,6 @@ impl Puppeter {
             let service_postman = self
                 .master_of_puppets
                 .get_service_postman_by_pid(master_pid)
-                .clone()
                 .expect("Service postman not found");
 
             service_postman
@@ -639,6 +645,20 @@ impl Puppeter {
                 }
             }
         };
+    }
+
+    pub fn non_critical_error(&self, msg: impl ToString) -> NonCriticalError {
+        NonCriticalError {
+            puppet: self.pid,
+            message: msg.to_string(),
+        }
+    }
+
+    pub fn critical_error(&self, msg: impl ToString) -> CriticalError {
+        CriticalError {
+            puppet: self.pid,
+            message: msg.to_string(),
+        }
     }
 }
 

@@ -6,8 +6,7 @@ pub fn expand(ast: &DeriveInput) -> TokenStream {
     let name = &ast.ident;
 
     let gen = quote! {
-        impl Master for #name {}
-        impl Puppet for #name {}
+        impl ::master_of_puppets::puppet::Lifecycle for #name {}
     };
 
     gen

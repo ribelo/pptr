@@ -12,6 +12,7 @@ use crate::puppet::Lifecycle;
 pub struct Id(u64);
 
 impl Id {
+    #[must_use]
     pub fn new<T>() -> Self
     where
         T: 'static,
@@ -22,6 +23,7 @@ impl Id {
         Self(hasher.finish())
     }
 
+    #[must_use]
     pub fn to_pid<P>(&self) -> Pid
     where
         P: Lifecycle,
@@ -67,6 +69,7 @@ impl Ord for Pid {
 }
 
 impl Pid {
+    #[must_use]
     pub fn new<P>() -> Self
     where
         P: Lifecycle,
@@ -78,7 +81,8 @@ impl Pid {
         }
     }
 
-    pub fn to_id(&self) -> Id {
+    #[must_use]
+    pub const fn to_id(&self) -> Id {
         self.id
     }
 
@@ -86,9 +90,10 @@ impl Pid {
     where
         T: 'static,
     {
-        std::any::type_name::<T>().to_string()
+        std::any::type_name::<T>().to_owned()
     }
 
+    #[must_use]
     pub fn name(&self) -> String {
         (self.name_fn)()
     }
