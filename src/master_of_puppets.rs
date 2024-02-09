@@ -32,7 +32,7 @@ pub type StatusChannels = (
 
 type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct MasterOfPuppets {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
     pub(crate) service_postmans: Arc<Mutex<FxHashMap<Pid, ServicePostman>>>,
@@ -46,7 +46,7 @@ pub struct MasterOfPuppets {
 impl MasterOfPuppets {
     #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        MasterOfPuppets::default()
     }
 
     pub fn register_puppet<M, P>(
@@ -167,11 +167,11 @@ impl MasterOfPuppets {
             .get(&puppet)
             .map(|(tx, _)| {
                 tx.send_if_modified(|current| {
-                    if *current != status {
+                    if *current == status {
+                        false
+                    } else {
                         *current = status;
                         true
-                    } else {
-                        false
                     }
                 })
             });
@@ -231,7 +231,7 @@ impl MasterOfPuppets {
             .lock()
             .expect("Failed to acquire mutex lock")
             .get(&puppet)
-            .cloned()
+            .copied()
     }
 
     pub fn set_puppet_master<O, M, P>(&self) -> Result<(), PuppetOperationError>
@@ -431,6 +431,7 @@ impl MasterOfPuppets {
         }
     }
 
+    #[allow(clippy::impl_trait_in_params)]
     pub async fn spawn<M, P>(
         &self,
         builder: impl Into<PuppetBuilder<P>> + Send,
@@ -440,6 +441,18 @@ impl MasterOfPuppets {
         P: Lifecycle,
     {
         let master = Pid::new::<M>();
+        self.spawn_puppet_by_pid(master, builder).await
+    }
+
+    #[allow(clippy::impl_trait_in_params)]
+    pub async fn spawn_self<P>(
+        &self,
+        builder: impl Into<PuppetBuilder<P>> + Send,
+    ) -> Result<Address<P>, PuppetError>
+    where
+        P: Lifecycle,
+    {
+        let master = Pid::new::<P>();
         self.spawn_puppet_by_pid(master, builder).await
     }
 
@@ -485,7 +498,7 @@ impl MasterOfPuppets {
             ));
         };
 
-        let mut puppeter = Puppeter {
+        let puppeter = Puppeter {
             pid,
             master_of_puppets: self.clone(),
             retry_config,
@@ -578,58 +591,48 @@ pub(crate) async fn run_puppet_loop<P>(
     loop {
         tokio::select! {
             res = puppet_status.changed() => {
-                match res {
-                    Ok(_) => {
-                        if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
-                            | LifecycleStatus::Failed) {
-                            println!("Stopping loop due to puppet status change");
-                            tracing::info!(puppet = %puppeter.pid,  "Stopping loop due to puppet status change");
-                            break;
-                        }
-                    }
-                    Err(_) => {
-                        println!("Stopping loop due to closed puppet status channel");
-                        tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed puppet status channel");
+                if let Ok(()) = res {
+                    if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
+                        | LifecycleStatus::Failed) {
+                        tracing::info!(puppet = %puppeter.pid, "Stopping loop due to puppet status change");
                         break;
                     }
+                } else {
+                    tracing::debug!(puppet = %puppeter.pid, "Stopping loop due to closed puppet status channel");
+                    break;
                 }
             }
             res = handle.command_rx.recv() => {
-                match res {
-                    Some(mut service_packet) => {
-                        if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                            if let Err(err) = service_packet.handle_command(&mut puppet, &mut puppeter).await {
-                                tracing::error!(puppet = %puppeter.pid,  "Failed to handle command: {}", err);
-                            }
-                        } else {
-                            tracing::debug!(puppet = %puppeter.pid,  "Ignoring command due to non-Active puppet status");
-                            let error_response = PuppetCannotHandleMessage::new(puppeter.pid, *puppet_status.borrow()).into();
-                            service_packet.reply_error(error_response).await;
+                if let Some(mut service_packet) = res {
+                    if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
+                        if let Err(err) = service_packet.handle_command(&mut puppet, &mut puppeter).await {
+                            tracing::error!(puppet = %puppeter.pid, "Failed to handle command: {}", err);
                         }
+                    } else {
+                        tracing::debug!(puppet = %puppeter.pid, "Ignoring command due to non-Active puppet status");
+                        let error_response = PuppetCannotHandleMessage::new(puppeter.pid, *puppet_status.borrow()).into();
+                        service_packet.reply_error(error_response);
                     }
-                    None => {
-                        tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed command channel");
-                        break;
-                    }
+                } else {
+                    tracing::debug!(puppet = %puppeter.pid, "Stopping loop due to closed command channel");
+                    break;
                 }
             }
             res = handle.message_rx.recv() => {
-                match res {
-                    Some(mut envelope) => {
-                        if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                            if let Err(err) = envelope.handle_message(&mut puppet, &mut puppeter).await {
-                                panic!("Failed to handle message: {}", err);
-                            }
-                        } else {
-                            let status = *puppet_status.borrow();
-                            tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
-                            envelope.reply_error(PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
+                if let Some(mut envelope) = res {
+                    if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
+                        // envelope.handle_message(&mut puppet, &mut puppeter).await;
+                        if let Err(err) = envelope.handle_message(&mut puppet, &mut puppeter).await {
+                            panic!("Failed to handle message: {err}");
                         }
+                    } else {
+                        let status = *puppet_status.borrow();
+                        tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
+                        envelope.reply_error(PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
                     }
-                    None => {
-                        tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed message channel");
-                        break;
-                    }
+                } else {
+                    tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed message channel");
+                    break;
                 }
             }
         }
@@ -651,26 +654,37 @@ mod tests {
     use super::*;
 
     #[derive(Debug, Clone, Default)]
-    struct MasterActor;
+    struct MasterActor {
+        failures: usize,
+    }
 
     #[async_trait]
     impl Lifecycle for MasterActor {
         type Supervision = OneForAll;
 
-        async fn reset(&self, _puppeter: &Puppeter) -> Result<Self, CriticalError> {
-            todo!()
+        async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError> {
+            println!("Resetting MasterActor");
+            Err(CriticalError::new(
+                puppeter.pid,
+                "Failed to reset MasterActor",
+            ))
         }
     }
 
     #[derive(Debug, Clone, Default)]
-    struct PuppetActor;
+    struct PuppetActor {
+        failures: usize,
+    }
 
     #[async_trait]
     impl Lifecycle for PuppetActor {
         type Supervision = OneForAll;
 
         async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError> {
-            todo!()
+            println!("Resetting PuppetActor");
+            Ok(Self {
+                failures: self.failures,
+            })
         }
     }
 
@@ -679,6 +693,12 @@ mod tests {
 
     #[derive(Debug)]
     struct PuppetMessage;
+
+    #[derive(Debug)]
+    struct MasterFailingMessage;
+
+    #[derive(Debug)]
+    struct PuppetFailingMessage;
 
     #[async_trait]
     impl Handler<MasterMessage> for MasterActor {
@@ -703,6 +723,50 @@ mod tests {
             _puppeter: &Puppeter,
         ) -> Result<Self::Response, PuppetError> {
             Ok(())
+        }
+    }
+
+    #[async_trait]
+    impl Handler<MasterFailingMessage> for MasterActor {
+        type Response = ();
+        type Executor = SequentialExecutor;
+        async fn handle_message(
+            &mut self,
+            _msg: MasterFailingMessage,
+            puppeter: &Puppeter,
+        ) -> Result<Self::Response, PuppetError> {
+            println!("Handling MasterFailingMessage. Failures: {}", self.failures);
+            if self.failures < 3 {
+                self.failures += 1;
+                Err(PuppetError::critical(
+                    puppeter.pid,
+                    "Failed to handle MasterFailingMessage",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[async_trait]
+    impl Handler<PuppetFailingMessage> for PuppetActor {
+        type Response = ();
+        type Executor = SequentialExecutor;
+        async fn handle_message(
+            &mut self,
+            _msg: PuppetFailingMessage,
+            puppeter: &Puppeter,
+        ) -> Result<Self::Response, PuppetError> {
+            println!("Handling MasterFailingMessage. Failures: {}", self.failures);
+            if self.failures < 3 {
+                self.failures += 1;
+                Err(PuppetError::critical(
+                    puppeter.pid,
+                    "Failed to handle PuppetFailingMessage",
+                ))
+            } else {
+                Ok(())
+            }
         }
     }
 
@@ -920,11 +984,11 @@ mod tests {
     async fn test_spawn() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
         let res = mop
-            .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap_err();
     }
@@ -933,18 +997,14 @@ mod tests {
     async fn test_send() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
 
-        let res = mop
-            .send::<PuppetActor, PuppetMessage>(PuppetMessage {})
-            .await;
+        let res = mop.send::<PuppetActor, PuppetMessage>(PuppetMessage).await;
         res.unwrap();
 
-        let res = mop
-            .send::<MasterActor, MasterMessage>(MasterMessage {})
-            .await;
+        let res = mop.send::<MasterActor, MasterMessage>(MasterMessage).await;
         assert!(res.is_err());
     }
 
@@ -952,18 +1012,14 @@ mod tests {
     async fn test_ask() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
 
-        let res = mop
-            .ask::<PuppetActor, PuppetMessage>(PuppetMessage {})
-            .await;
+        let res = mop.ask::<PuppetActor, PuppetMessage>(PuppetMessage).await;
         res.unwrap();
 
-        let res = mop
-            .ask::<MasterActor, MasterMessage>(MasterMessage {})
-            .await;
+        let res = mop.ask::<MasterActor, MasterMessage>(MasterMessage).await;
         assert!(res.is_err());
     }
 
@@ -971,19 +1027,14 @@ mod tests {
     async fn test_ask_with_timeout() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         assert!(res.is_ok());
         let res = mop
-            .ask_with_timeout::<PuppetActor, PuppetMessage>(
-                PuppetMessage {},
-                Duration::from_secs(1),
-            )
+            .ask_with_timeout::<PuppetActor, PuppetMessage>(PuppetMessage, Duration::from_secs(1))
             .await;
         assert!(res.is_ok());
-        let res = mop
-            .send::<MasterActor, MasterMessage>(MasterMessage {})
-            .await;
+        let res = mop.send::<MasterActor, MasterMessage>(MasterMessage).await;
         assert!(res.is_err());
     }
 
@@ -991,7 +1042,7 @@ mod tests {
     async fn test_send_command_stop_by_pid() {
         let mop = MasterOfPuppets::new();
         let res = mop
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1014,7 +1065,7 @@ mod tests {
         impl Lifecycle for CounterPuppet {
             type Supervision = OneForAll;
             async fn reset(&self, _puppeter: &Puppeter) -> Result<Self, CriticalError> {
-                Ok(Default::default())
+                Ok(CounterPuppet::default())
             }
         }
 
@@ -1065,6 +1116,39 @@ mod tests {
             .unwrap();
         address.send(IncrementCounter).await.unwrap();
         // wait 1 second for the puppet to finish
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    async fn test_successful_recovery_after_failure() {
+        let mop = MasterOfPuppets::new();
+        let res = mop
+            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
+            .await;
+        res.unwrap();
+
+        loop {
+            let res = mop.ask::<PuppetActor, _>(PuppetFailingMessage).await;
+            if res.is_ok() {
+                break;
+            }
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    #[tokio::test]
+    async fn test_failed_recovery_after_failure() {
+        let mop = MasterOfPuppets::new();
+        let res = mop
+            .spawn_self::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
+            .await;
+        res.unwrap();
+
+        loop {
+            let res = mop.ask::<MasterActor, _>(MasterFailingMessage).await;
+            if res.is_err() {
+                break;
+            }
+        }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 

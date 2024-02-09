@@ -15,7 +15,7 @@ pub struct PuppetDoesNotExistError {
 
 impl PuppetDoesNotExistError {
     #[must_use]
-    pub const fn new(puppet: Pid) -> Self {
+    pub fn new(puppet: Pid) -> Self {
         Self { puppet }
     }
     #[must_use]
@@ -29,7 +29,7 @@ impl PuppetDoesNotExistError {
 
 impl From<PuppetDoesNotExistError> for PuppetError {
     fn from(value: PuppetDoesNotExistError) -> Self {
-        Self::critical(value.puppet, value)
+        Self::critical(value.puppet, &value)
     }
 }
 
@@ -45,13 +45,13 @@ pub struct PuppetAlreadyExist {
 
 impl From<PuppetAlreadyExist> for PuppetError {
     fn from(value: PuppetAlreadyExist) -> Self {
-        Self::critical(value.puppet, value.to_string())
+        Self::critical(value.puppet, &value)
     }
 }
 
 impl PuppetAlreadyExist {
     #[must_use]
-    pub const fn new(puppet: Pid) -> Self {
+    pub fn new(puppet: Pid) -> Self {
         Self { puppet }
     }
     #[must_use]
@@ -84,7 +84,7 @@ impl fmt::Display for PermissionDeniedError {
 
 impl PermissionDeniedError {
     #[must_use]
-    pub const fn new(master: Pid, puppet: Pid) -> Self {
+    pub fn new(master: Pid, puppet: Pid) -> Self {
         Self {
             master,
             puppet,
@@ -99,7 +99,9 @@ impl PermissionDeniedError {
     {
         Self::new(Pid::new::<M>(), Pid::new::<P>())
     }
-    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+
+    #[must_use]
+    pub fn with_message<T: Into<String>>(mut self, message: T) -> Self {
         self.message = Some(message.into());
         self
     }
@@ -114,7 +116,7 @@ impl PermissionDeniedError {
 
 impl From<PermissionDeniedError> for PuppetError {
     fn from(value: PermissionDeniedError) -> Self {
-        Self::critical(value.puppet, value)
+        Self::critical(value.puppet, &value)
     }
 }
 
@@ -127,13 +129,13 @@ pub struct PuppetCannotHandleMessage {
 
 impl From<PuppetCannotHandleMessage> for PuppetError {
     fn from(value: PuppetCannotHandleMessage) -> Self {
-        Self::non_critical(value.puppet, value.to_string())
+        Self::non_critical(value.puppet, &value)
     }
 }
 
 impl PuppetCannotHandleMessage {
     #[must_use]
-    pub const fn new(puppet: Pid, status: LifecycleStatus) -> Self {
+    pub fn new(puppet: Pid, status: LifecycleStatus) -> Self {
         Self { puppet, status }
     }
     #[must_use]
@@ -161,6 +163,15 @@ pub struct CriticalError {
     pub message: String,
 }
 
+impl CriticalError {
+    pub fn new<T: ToString + ?Sized>(puppet: Pid, message: &T) -> Self {
+        Self {
+            puppet,
+            message: message.to_string(),
+        }
+    }
+}
+
 #[derive(Error, Debug, Clone)]
 pub enum PuppetError {
     #[error(transparent)]
@@ -170,14 +181,14 @@ pub enum PuppetError {
 }
 
 impl PuppetError {
-    pub fn non_critical(puppet: Pid, message: impl ToString) -> Self {
+    pub fn non_critical<T: ToString + ?Sized>(puppet: Pid, message: &T) -> Self {
         NonCriticalError {
             puppet,
             message: message.to_string(),
         }
         .into()
     }
-    pub fn critical(puppet: Pid, message: impl ToString) -> Self {
+    pub fn critical<T: ToString + ?Sized>(puppet: Pid, message: &T) -> Self {
         CriticalError {
             puppet,
             message: message.to_string(),
@@ -193,7 +204,7 @@ pub struct RetryError {
 }
 
 impl RetryError {
-    pub fn new(message: impl ToString) -> Self {
+    pub fn new<T: ToString + ?Sized>(message: &T) -> Self {
         Self {
             message: message.to_string(),
         }
@@ -254,10 +265,10 @@ pub enum PostmanError {
 impl From<PostmanError> for PuppetError {
     fn from(err: PostmanError) -> Self {
         match err {
-            PostmanError::SendError { puppet } => Self::critical(puppet, err),
-            PostmanError::ReceiveError { puppet } => Self::critical(puppet, err),
-            PostmanError::ResponseReceiveError { puppet } => Self::critical(puppet, err),
-            PostmanError::ResponseTimeout { puppet } => Self::critical(puppet, err),
+            PostmanError::ResponseTimeout { puppet }
+            | PostmanError::ReceiveError { puppet }
+            | PostmanError::SendError { puppet }
+            | PostmanError::ResponseReceiveError { puppet } => Self::critical(puppet, &err),
             PostmanError::PuppetError(err) => err,
         }
     }

@@ -44,7 +44,7 @@ where
     P: Handler<E>,
     E: Message,
 {
-    pub const fn without_reply(message: E) -> Self {
+    pub fn without_reply(message: E) -> Self {
         Self {
             message: Some(message),
             reply_address: None,
@@ -109,7 +109,7 @@ impl ServicePacket {
     }
 
     #[must_use]
-    pub const fn without_reply(cmd: ServiceCommand) -> Self {
+    pub fn without_reply(cmd: ServiceCommand) -> Self {
         Self {
             cmd: Some(cmd),
             reply_address: None,
@@ -149,7 +149,7 @@ impl ServicePacket {
         Ok(())
     }
 
-    pub(crate) async fn reply_error(&mut self, err: PuppetError) {
+    pub(crate) fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
             let _ = reply_address.send(Err(err));
         }
@@ -199,7 +199,6 @@ where
         Self { tx }
     }
 
-    #[inline(always)]
     pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
         P: Handler<E>,
@@ -214,7 +213,6 @@ where
         Ok(())
     }
 
-    #[inline(always)]
     pub async fn send_and_await_response<E>(
         &self,
         message: E,
@@ -272,7 +270,7 @@ pub struct ServicePostman {
 
 impl ServicePostman {
     #[must_use]
-    pub const fn new(tx: tokio::sync::mpsc::Sender<ServicePacket>) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::Sender<ServicePacket>) -> Self {
         Self { tx }
     }
 
@@ -302,13 +300,13 @@ impl ServicePostman {
                 Err(PostmanError::ResponseReceiveError { puppet }),
                 |inner_res| {
                     inner_res.map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
-                        res.map_err(|e| e.into())
+                        res.map_err(std::convert::Into::into)
                     })
                 },
             )
         } else {
             (res_rx.await).map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
-                res.map_err(|e| e.into())
+                res.map_err(std::convert::Into::into)
             })
         }
     }
@@ -348,7 +346,7 @@ pub(crate) struct ServiceMailbox {
 }
 
 impl ServiceMailbox {
-    pub const fn new(rx: tokio::sync::mpsc::Receiver<ServicePacket>) -> Self {
+    pub fn new(rx: tokio::sync::mpsc::Receiver<ServicePacket>) -> Self {
         Self { rx }
     }
     pub async fn recv(&mut self) -> Option<ServicePacket> {

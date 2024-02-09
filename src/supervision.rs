@@ -1,5 +1,6 @@
 use std::{
     fmt,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -23,11 +24,16 @@ pub mod strategy {
 
 #[derive(Debug, Clone)]
 pub struct RetryConfig {
+    pub inner: Arc<Mutex<RetryConfigInner>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RetryConfigInner {
     pub max_retries: Option<usize>,
     pub within_duration: Option<Duration>,
     pub with_time_between: Option<Duration>,
-    current_retry_count: usize,
-    last_retry: Instant,
+    pub current_retry_count: usize,
+    pub last_retry: Instant,
 }
 
 #[derive(Default)]
@@ -40,7 +46,7 @@ pub struct RetryConfigBuilder {
 impl RetryConfigBuilder {
     #[must_use]
     pub fn new() -> Self {
-        Default::default()
+        RetryConfigBuilder::default()
     }
 
     #[must_use]
@@ -63,45 +69,53 @@ impl RetryConfigBuilder {
 
     #[must_use]
     pub fn build(self) -> RetryConfig {
-        RetryConfig {
+        let inner = RetryConfigInner {
             max_retries: self.max_retries,
             within_duration: self.within_duration,
             with_time_between: self.with_time_between,
             current_retry_count: 0,
             last_retry: Instant::now(),
+        };
+        RetryConfig {
+            inner: Arc::new(Mutex::new(inner)),
         }
     }
 }
 
 impl Default for RetryConfig {
     fn default() -> Self {
-        Self {
+        let inner = RetryConfigInner {
             max_retries: None,
             within_duration: None,
             with_time_between: None,
             current_retry_count: 0,
             last_retry: Instant::now(),
+        };
+        Self {
+            inner: Arc::new(Mutex::new(inner)),
         }
     }
 }
 
 impl RetryConfig {
-    fn reset_count(&mut self) {
-        self.current_retry_count = 0;
-        self.last_retry = Instant::now();
+    fn reset_count(&self) {
+        self.inner.lock().unwrap().current_retry_count = 0;
+        self.inner.lock().unwrap().last_retry = Instant::now();
     }
 
-    pub fn increment_retry(&mut self) -> Result<(), RetryError> {
-        let elapsed = self.last_retry.elapsed();
+    pub fn increment_retry(&self) -> Result<(), RetryError> {
+        let elapsed = self.inner.lock().unwrap().last_retry.elapsed();
 
-        if let Some(duration) = self.within_duration {
+        if let Some(duration) = self.inner.lock().unwrap().within_duration {
             if elapsed > duration {
                 self.reset_count();
             }
         }
 
-        if self.current_retry_count < self.max_retries.unwrap_or(0) {
-            self.current_retry_count += 1;
+        if self.inner.lock().unwrap().current_retry_count
+            < self.inner.lock().unwrap().max_retries.unwrap_or(0)
+        {
+            self.inner.lock().unwrap().current_retry_count += 1;
             Ok(())
         } else {
             Err(RetryError::new("Max retry reached"))
@@ -109,7 +123,7 @@ impl RetryConfig {
     }
 
     pub async fn maybe_wait(&self) {
-        let duration = self.with_time_between;
+        let duration = self.inner.lock().unwrap().with_time_between;
         if let Some(duration) = duration {
             tokio::time::sleep(duration).await;
         }
@@ -149,7 +163,7 @@ impl SupervisionStrategy for strategy::OneForAll {
             for pid in puppets.into_iter().rev() {
                 post_office
                     .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
-                    .await?
+                    .await?;
             }
         }
         Ok(())
@@ -169,14 +183,14 @@ impl SupervisionStrategy for strategy::RestForOne {
                 if restart_next {
                     post_office
                         .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
-                        .await?
+                        .await?;
                 }
 
                 if pid == puppet {
                     restart_next = true;
                     post_office
                         .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
-                        .await?
+                        .await?;
                 }
             }
         }

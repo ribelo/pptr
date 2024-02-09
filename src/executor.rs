@@ -78,26 +78,17 @@ where
     {
         let cloned_puppet = puppet.clone();
         let cloned_puppeter = puppeter.clone();
-        let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             let mut local_puppet = cloned_puppet;
             let mut local_puppeter = cloned_puppeter;
-            let result = SequentialExecutor::execute(
+            let _result = SequentialExecutor::execute(
                 &mut local_puppet,
                 &mut local_puppeter,
                 msg,
                 reply_address,
             )
             .await;
-            tx.send(result)
-                .expect("Failed to send response over the oneshot channel");
         });
-        if let Err(err) = rx.await {
-            panic!(
-                "Failed to receive response from the oneshot channel: {:?}",
-                err
-            );
-        };
         Ok(())
     }
 }

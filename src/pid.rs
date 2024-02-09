@@ -82,7 +82,7 @@ impl Pid {
     }
 
     #[must_use]
-    pub const fn to_id(&self) -> Id {
+    pub fn to_id(&self) -> Id {
         self.id
     }
 
@@ -110,7 +110,7 @@ impl fmt::Debug for Pid {
         f.debug_struct("Id")
             .field("id", &self.id)
             .field("name", &self.name())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 

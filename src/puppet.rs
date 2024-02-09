@@ -53,7 +53,7 @@ pub enum LifecycleStatus {
     Failed,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Puppeter {
     pub pid: Pid,
     pub(crate) master_of_puppets: MasterOfPuppets,
@@ -79,18 +79,22 @@ where
         Self {
             pid: Pid::new::<P>(),
             puppet: Some(state),
+            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
             messages_bufer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
+            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
             commands_bufer_size: unsafe { NonZeroUsize::new_unchecked(16) },
-            retry_config: Some(Default::default()),
+            retry_config: Some(RetryConfig::default()),
         }
     }
 
-    pub const fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
+    #[must_use]
+    pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.messages_bufer_size = size;
         self
     }
 
-    pub const fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
+    #[must_use]
+    pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.commands_bufer_size = size;
         self
     }
@@ -113,7 +117,7 @@ where
 
 impl Puppeter {
     pub(crate) async fn start<P>(
-        &mut self,
+        &self,
         puppet: &mut P,
         is_restarting: bool,
     ) -> Result<(), PuppetError>
@@ -122,20 +126,16 @@ impl Puppeter {
     {
         // Determine the service command and initial status based on whether the service is
         // restarting or not.
-        let (service_command, begin_status) = match is_restarting {
-            true => (ServiceCommand::Start, LifecycleStatus::Activating),
-            false => {
-                (
-                    ServiceCommand::Restart {
-                        stage: Some(RestartStage::Start),
-                    },
-                    LifecycleStatus::Restarting,
-                )
-            }
+        let (service_command, begin_status) = if is_restarting {
+            (ServiceCommand::Start, LifecycleStatus::Activating)
+        } else {
+            (
+                ServiceCommand::Restart {
+                    stage: Some(RestartStage::Start),
+                },
+                LifecycleStatus::Restarting,
+            )
         };
-
-        // Clone the retry config from the supervision config.
-        // let mut retry_config = self.supervision_config.retry;
 
         // Flag to store if the `on_start` function has been completed.
         let mut on_start_done = false;
@@ -150,7 +150,7 @@ impl Puppeter {
             if !on_start_done {
                 // Perform the `on_start` function which initializes the puppet service.
                 match puppet.on_start(self).await {
-                    Ok(_) | Err(PuppetError::NonCritical(_)) => {
+                    Ok(()) | Err(PuppetError::NonCritical(_)) => {
                         // If `on_start` succeeds or returns a non-critical error, set the status
                         // to `Active` and mark `on_start_done` as `true`.
                         on_start_done = true;
@@ -163,16 +163,15 @@ impl Puppeter {
                             // If the maximum retry attempts are reached during `start_all_puppets`
                             // Mark the tree as poisoned.
                             if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(PuppetError::critical(self.pid, err));
+                                return Err(PuppetError::critical(self.pid, &err));
                             }
                             // And return a fatal error indicating the failure.
                             return Err(error);
-                        } else {
-                            // Increment the retry count, wait according to the retry config, and
-                            // continue to the next iteration of the loop.
-                            self.retry_config.maybe_wait().await;
-                            continue;
                         }
+                        // Increment the retry count, wait according to the retry config, and
+                        // continue to the next iteration of the loop.
+                        self.retry_config.maybe_wait().await;
+                        continue;
                     }
                 }
             }
@@ -181,7 +180,7 @@ impl Puppeter {
                 // Start all puppets by calling the `start_all_puppets` function with the specified
                 // service command.
                 match self.start_all_puppets(&service_command).await {
-                    Ok(_) | Err(PuppetError::NonCritical(_)) => {
+                    Ok(()) | Err(PuppetError::NonCritical(_)) => {
                         // If `start_all_puppets` succeeds or returns a non-critical error, mark
                         // `start_all_puppets_done` as `true`.
                         start_all_puppets_done = true;
@@ -193,16 +192,15 @@ impl Puppeter {
                             // If the maximum retry attempts are reached during `start_all_puppets`
                             // Mark the tree as poisoned.
                             if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(PuppetError::critical(self.pid, err));
+                                return Err(PuppetError::critical(self.pid, &err));
                             }
                             // And return a fatal error indicating the failure.
                             return Err(error);
-                        } else {
-                            // Increment the retry count, wait according to the retry config, and
-                            // continue to the next iteration of the loop.
-                            self.retry_config.maybe_wait().await;
-                            continue;
                         }
+                        // Increment the retry count, wait according to the retry config, and
+                        // continue to the next iteration of the loop.
+                        self.retry_config.maybe_wait().await;
+                        continue;
                     }
                 }
             }
@@ -217,22 +215,21 @@ impl Puppeter {
         Ok(())
     }
 
-    async fn stop<P>(&mut self, puppet: &mut P, is_restarting: bool) -> Result<(), PuppetError>
+    async fn stop<P>(&self, puppet: &mut P, is_restarting: bool) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
         // Determine the service command and initial status based on whether the service is
         // restarting or not.
-        let (service_command, begin_status) = match is_restarting {
-            true => (ServiceCommand::Start, LifecycleStatus::Activating),
-            false => {
-                (
-                    ServiceCommand::Restart {
-                        stage: Some(RestartStage::Start),
-                    },
-                    LifecycleStatus::Restarting,
-                )
-            }
+        let (service_command, begin_status) = if is_restarting {
+            (ServiceCommand::Start, LifecycleStatus::Activating)
+        } else {
+            (
+                ServiceCommand::Restart {
+                    stage: Some(RestartStage::Start),
+                },
+                LifecycleStatus::Restarting,
+            )
         };
         // Clone the retry config from the supervision config.
         // let retry_config = self.supervision_config.retry.clone();
@@ -249,7 +246,7 @@ impl Puppeter {
 
             if !stop_all_puppets_done {
                 match self.stop_all_puppets(&service_command).await {
-                    Ok(_) | Err(PuppetError::NonCritical(_)) => stop_all_puppets_done = true,
+                    Ok(()) | Err(PuppetError::NonCritical(_)) => stop_all_puppets_done = true,
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
                             let error =
@@ -257,23 +254,22 @@ impl Puppeter {
                             // If the maximum retry attempts are reached during `stop_all_puppets`,
                             // Mark tree as poisoned.
                             if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(PuppetError::critical(self.pid, err));
+                                return Err(PuppetError::critical(self.pid, &err));
                             };
                             // And return a fatal error indicating the failure.
                             return Err(error);
-                        } else {
-                            // Increment the retry count, wait according to the retry config, and
-                            // continue to the next iteration of the loop.
-                            self.retry_config.maybe_wait().await;
-                            continue;
                         }
+                        // Increment the retry count, wait according to the retry config, and
+                        // continue to the next iteration of the loop.
+                        self.retry_config.maybe_wait().await;
+                        continue;
                     }
                 }
             }
 
             if !on_stop_done {
                 match puppet.on_stop(self).await {
-                    Ok(_) | Err(PuppetError::NonCritical(_)) => {
+                    Ok(()) | Err(PuppetError::NonCritical(_)) => {
                         // If `on_stop` succeeds or returns a non-critical error, set the status
                         // to `Inactive` and mark `on_stop_done` as `true`.
                         on_stop_done = true;
@@ -286,16 +282,15 @@ impl Puppeter {
                             // If the maximum retry attempts are reached during `on_stop`,
                             // Mark tree as poisoned.
                             if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(PuppetError::critical(self.pid, err));
+                                return Err(PuppetError::critical(self.pid, &err));
                             };
                             // And return a fatal error indicating the failure.
                             return Err(error);
-                        } else {
-                            // Increment the retry count, wait according to the retry config, and
-                            // continue to the next iteration of the loop.
-                            self.retry_config.maybe_wait().await;
-                            continue;
                         }
+                        // Increment the retry count, wait according to the retry config, and
+                        // continue to the next iteration of the loop.
+                        self.retry_config.maybe_wait().await;
+                        continue;
                     }
                 }
             }
@@ -310,7 +305,7 @@ impl Puppeter {
         Ok(())
     }
 
-    async fn restart<P>(&mut self, puppet: &mut P) -> Result<(), PuppetError>
+    async fn restart<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -320,13 +315,17 @@ impl Puppeter {
         self.start(puppet, true).await?;
         Ok(())
     }
-    pub(crate) async fn fail<P>(&mut self, puppet: &mut P) -> Result<(), PuppetError>
+    pub(crate) async fn fail<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
-        self.fail_all_puppets(puppet).await?;
-        self.set_status(LifecycleStatus::Failed);
-        Ok(())
+        if let Err(err) = self.fail_all_puppets(puppet).await {
+            self.set_status(LifecycleStatus::Failed);
+            Err(err)
+        } else {
+            self.set_status(LifecycleStatus::Failed);
+            Ok(())
+        }
     }
 
     #[must_use]
@@ -347,7 +346,7 @@ impl Puppeter {
     }
 
     pub(crate) fn set_status(&self, status: LifecycleStatus) {
-        self.master_of_puppets.set_status_by_pid(self.pid, status)
+        self.master_of_puppets.set_status_by_pid(self.pid, status);
     }
 
     #[must_use]
@@ -403,12 +402,10 @@ impl Puppeter {
             .puppet_has_permission_by_pid(master_pid, puppet_pid)
     }
 
-    pub async fn spawn<P>(
-        &self,
-        builder: impl Into<PuppetBuilder<P>> + Send,
-    ) -> Result<Address<P>, PuppetError>
+    pub async fn spawn<P, B>(&self, builder: B) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
+        B: Into<PuppetBuilder<P>> + Send,
     {
         self.master_of_puppets
             .spawn_puppet_by_pid::<P>(self.pid, builder)
@@ -417,7 +414,7 @@ impl Puppeter {
 
     #[async_recursion]
     pub async fn report_failure<P>(
-        &mut self,
+        &self,
         puppet: &mut P,
         error: PuppetError,
     ) -> Result<(), PuppetError>
@@ -430,29 +427,30 @@ impl Puppeter {
         }
 
         let Some(master_pid) = self.get_master::<P>() else {
-            return Err(PuppetDoesNotExistError::new(Pid::new::<P>()).into());
+            return self.fail(puppet).await;
         };
-        let puppet_pid = self.pid;
 
-        if master_pid == puppet_pid {
-            if (self.restart(puppet).await).is_err() {
-                self.fail(puppet).await?;
+        if master_pid == self.pid {
+            match self.restart(puppet).await {
+                Ok(()) | Err(PuppetError::NonCritical(_)) => return Ok(()),
+                Err(PuppetError::Critical(_)) => {
+                    panic!("Failed to restart last puppet {}", self.pid)
+                }
             }
-            Ok(())
         } else if let Some(service_postman) = self
             .master_of_puppets
             .get_service_postman_by_pid(master_pid)
         {
             service_postman
                 .send(
-                    puppet_pid,
+                    self.pid,
                     ServiceCommand::ReportFailure {
-                        pid: puppet_pid,
+                        pid: self.pid,
                         error,
                     },
                 )
                 .await
-                .map_err(|err| PuppetError::critical(self.pid, err))
+                .map_err(|err| PuppetError::critical(self.pid, &err))
         } else {
             Err(PuppetDoesNotExistError::new(master_pid).into())
         }
@@ -566,7 +564,7 @@ impl Puppeter {
     }
 
     pub(crate) async fn start_all_puppets(
-        &mut self,
+        &self,
         command: &ServiceCommand,
     ) -> Result<(), PuppetError> {
         // Initialize a vector to hold the puppets that have been successfully started.
@@ -582,7 +580,7 @@ impl Puppeter {
                 // Attempt to send the start command to the current puppet.
                 match self.send_command_by_pid(puppet, command.clone()).await {
                     // If successful, push the puppet to our vector of started puppets.
-                    Ok(_) => started_puppets.push(puppet),
+                    Ok(()) => started_puppets.push(puppet),
 
                     // If an error occurs, stop all puppets that have been started so far.
                     Err(err) => {
@@ -605,7 +603,7 @@ impl Puppeter {
         Ok(())
     }
     pub(crate) async fn stop_all_puppets(
-        &mut self,
+        &self,
         command: &ServiceCommand,
     ) -> Result<(), PuppetError> {
         // Initialize a vector to hold the puppets that have been successfully stopped.
@@ -621,7 +619,7 @@ impl Puppeter {
                 // Attempt to send the stop command to the current puppet.
                 match self.send_command_by_pid(*puppet, command.clone()).await {
                     // If successful, push the puppet to our vector of stopped puppets.
-                    Ok(_) => stopped_puppets.push(puppet),
+                    Ok(()) => stopped_puppets.push(puppet),
 
                     // Stopping is crucial, so if an error occurs, poison all puppets.
                     Err(err) => {
@@ -644,7 +642,7 @@ impl Puppeter {
         Ok(())
     }
 
-    pub(crate) async fn fail_all_puppets<P>(&mut self, puppet: &mut P) -> Result<(), PuppetError>
+    pub(crate) async fn fail_all_puppets<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
     {
@@ -655,7 +653,7 @@ impl Puppeter {
                 // Attempt to send the stop command to the current puppet.
                 if let Err(error) = self.send_command_by_pid(*pid, ServiceCommand::Fail).await {
                     if let Err(err) = self.report_failure(puppet, error.into()).await {
-                        PuppetError::critical(self.pid, err);
+                        PuppetError::critical(self.pid, &err);
                     }
                 }
             }

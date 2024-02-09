@@ -26,7 +26,7 @@ impl<S: Lifecycle> fmt::Debug for Address<S> {
         f.debug_struct("Address")
             .field("pid", &self.pid)
             .field("status", &self.get_status())
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -88,6 +88,7 @@ where
             .await
     }
 
+    #[allow(clippy::impl_trait_in_params)]
     pub async fn spawn<P>(
         &self,
         builder: impl Into<PuppetBuilder<P>> + Send,
