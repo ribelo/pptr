@@ -660,6 +660,13 @@ impl Puppeter {
         };
         Ok(())
     }
+
+    pub fn non_critical_error<E: ToString + ?Sized>(&self, error: &E) -> PuppetError {
+        PuppetError::non_critical(self.pid, error)
+    }
+    pub fn critical_error<E: ToString + ?Sized>(&self, error: &E) -> PuppetError {
+        PuppetError::critical(self.pid, error)
+    }
 }
 
 pub type ResponseFor<P, E> = <P as Handler<E>>::Response;
