@@ -1,6 +1,6 @@
 [package]
 name = "master-of-puppets-derive"
-version = "0.1.0"
+version = "0.1.51"
 edition = "2021"
 
 [lib]
