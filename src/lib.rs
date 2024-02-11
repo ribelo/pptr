@@ -29,6 +29,4 @@ pub mod prelude {
     pub use crate::puppet::PuppetBuilder;
     pub use crate::puppet::Puppeter;
     pub use crate::supervision::strategy::*;
-    pub use master_of_puppets_derive::Message;
-    pub use master_of_puppets_derive::Puppet;
 }

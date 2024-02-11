@@ -1,10 +1,9 @@
 [package]
 name = "master-of-puppets"
-version = "0.1.51"
+version = "0.1.53"
 edition = "2021"
 
 [dependencies]
-master-of-puppets-derive = { path = "./master_of_puppets_derive", optional = true }
 async-trait = "0.1"
 strum = { version = "0.26", features = ["derive"] }
 thiserror = "1.0"
@@ -16,7 +15,6 @@ anyhow = "1.0"
 async-recursion = "1.0"
 
 [dev-dependencies]
-master-of-puppets-derive = { path = "./master_of_puppets_derive" }
 actix = "0.13.1"
 vin = "9.1"
 ractor = "0.9"
@@ -24,10 +22,6 @@ criterion = "0.5"
 coerce = "0.8.10"
 crossbeam = { version = "0.8.2", features = ["crossbeam-channel"] }
 parking_lot = "0.12.1"
-
-[features]
-derive = ["dep:master-of-puppets-derive"]
-default = ["derive"]
 
 [[bench]]
 name = "master_of_puppets_bench"
