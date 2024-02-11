@@ -479,9 +479,9 @@ impl MasterOfPuppets {
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
         let (message_tx, message_rx) =
-            mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_bufer_size.into());
+            mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_buffer_size.into());
         let (command_tx, command_rx) =
-            mpsc::channel::<ServicePacket>(builder.commands_bufer_size.into());
+            mpsc::channel::<ServicePacket>(builder.commands_buffer_size.into());
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
         self.register_puppet_by_pid::<P>(
