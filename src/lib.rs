@@ -1,5 +1,3 @@
-#![feature(associated_type_defaults)]
-
 use std::any::Any;
 
 // pub mod address;
