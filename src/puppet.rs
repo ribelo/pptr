@@ -66,8 +66,8 @@ where
 {
     pub pid: Pid,
     pub puppet: Option<P>,
-    pub messages_bufer_size: NonZeroUsize,
-    pub commands_bufer_size: NonZeroUsize,
+    pub messages_buffer_size: NonZeroUsize,
+    pub commands_buffer_size: NonZeroUsize,
     pub retry_config: Option<RetryConfig>,
 }
 
@@ -80,22 +80,22 @@ where
             pid: Pid::new::<P>(),
             puppet: Some(state),
             // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
-            messages_bufer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
+            messages_buffer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
             // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
-            commands_bufer_size: unsafe { NonZeroUsize::new_unchecked(16) },
+            commands_buffer_size: unsafe { NonZeroUsize::new_unchecked(16) },
             retry_config: Some(RetryConfig::default()),
         }
     }
 
     #[must_use]
     pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
-        self.messages_bufer_size = size;
+        self.messages_buffer_size = size;
         self
     }
 
     #[must_use]
     pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
-        self.commands_bufer_size = size;
+        self.commands_buffer_size = size;
         self
     }
 
@@ -698,8 +698,6 @@ where
 mod tests {
 
     use std::time::Duration;
-
-    use master_of_puppets_derive::Message;
 
     use crate::{executor::ConcurrentExecutor, supervision::strategy::OneForAll};
 
