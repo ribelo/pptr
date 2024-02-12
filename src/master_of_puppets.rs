@@ -1,8 +1,10 @@
 use std::{
     hash::BuildHasherDefault,
+    pin::Pin,
     sync::{Arc, Mutex},
 };
 
+use atomic_take::AtomicTake;
 use indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHasher};
 use tokio::sync::{mpsc, watch};
@@ -19,6 +21,7 @@ use crate::{
         ServicePostman,
     },
     pid::{Id, Pid},
+    prelude::CriticalError,
     puppet::{
         Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, Puppeter, ResponseFor,
     },
@@ -32,7 +35,7 @@ pub type StatusChannels = (
 
 type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct MasterOfPuppets {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
     pub(crate) service_postmans: Arc<Mutex<FxHashMap<Pid, ServicePostman>>>,
@@ -40,13 +43,51 @@ pub struct MasterOfPuppets {
     pub(crate) master_to_puppets: Arc<Mutex<FxHashMap<Pid, FxIndexSet<Pid>>>>,
     pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
     pub(crate) resources: Arc<Mutex<FxHashMap<Id, BoxedAny>>>,
+    pub(crate) failure_tx: mpsc::UnboundedSender<CriticalError>,
+    pub(crate) failure_rx: Arc<AtomicTake<mpsc::UnboundedReceiver<CriticalError>>>,
+}
+
+impl Default for MasterOfPuppets {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 #[allow(clippy::expect_used)]
 impl MasterOfPuppets {
     #[must_use]
     pub fn new() -> Self {
-        MasterOfPuppets::default()
+        let (tx, rx) = mpsc::unbounded_channel();
+        Self {
+            message_postmans: Arc::default(),
+            service_postmans: Arc::default(),
+            statuses: Arc::default(),
+            master_to_puppets: Arc::default(),
+            puppet_to_master: Arc::default(),
+            resources: Arc::default(),
+            failure_tx: tx,
+            failure_rx: Arc::new(AtomicTake::new(rx)),
+        }
+    }
+
+    pub async fn on_unrecoverable_failure<F>(&self, f: F)
+    where
+        F: FnOnce(
+                MasterOfPuppets,
+                CriticalError,
+            ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
+            + Send
+            + 'static,
+    {
+        if let Some(mut rx) = self.failure_rx.take() {
+            if let Some(err) = rx.recv().await {
+                f(self.clone(), err).await;
+            }
+        }
+    }
+
+    pub async fn wait_for_unrecoverable_failure(self) -> CriticalError {
+        self.failure_rx.take().unwrap().recv().await.unwrap()
     }
 
     pub fn register_puppet<M, P>(
@@ -621,14 +662,11 @@ pub(crate) async fn run_puppet_loop<P>(
             res = handle.message_rx.recv() => {
                 if let Some(mut envelope) = res {
                     if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                        // envelope.handle_message(&mut puppet, &mut puppeter).await;
-                        if let Err(err) = envelope.handle_message(&mut puppet, &mut puppeter).await {
-                            panic!("Failed to handle message: {err}");
-                        }
+                        envelope.handle_message(&mut puppet, &mut puppeter).await;
                     } else {
                         let status = *puppet_status.borrow();
                         tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
-                        envelope.reply_error(PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
+                        envelope.reply_error(&puppeter, PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
                     }
                 } else {
                     tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed message channel");

@@ -7,6 +7,7 @@ use crate::{
     errors::{PostmanError, PuppetError},
     executor::Executor,
     pid::Pid,
+    prelude::CriticalError,
     puppet::{Handler, Lifecycle, Puppeter, ResponseFor},
 };
 
@@ -18,12 +19,8 @@ pub trait Envelope<P>: Send
 where
     P: Lifecycle,
 {
-    async fn handle_message(
-        &mut self,
-        puppet: &mut P,
-        puppeter: &mut Puppeter,
-    ) -> Result<(), PuppetError>;
-    async fn reply_error(&mut self, err: PuppetError);
+    async fn handle_message(&mut self, puppet: &mut P, puppeter: &mut Puppeter);
+    async fn reply_error(&mut self, puppeter: &Puppeter, err: PuppetError);
 }
 
 pub type ReplySender<T> = oneshot::Sender<Result<T, PuppetError>>;
@@ -69,24 +66,28 @@ where
     P: Handler<E>,
     E: Message + 'static,
 {
-    async fn handle_message(
-        &mut self,
-        puppet: &mut P,
-        puppeter: &mut Puppeter,
-    ) -> Result<(), PuppetError> {
+    async fn handle_message(&mut self, puppet: &mut P, puppeter: &mut Puppeter) {
         if let Some(msg) = self.message.take() {
             let reply_address = self.reply_address.take();
-            <P as Handler<E>>::Executor::execute(puppet, puppeter, msg, reply_address).await
+            if let Err(err) =
+                <P as Handler<E>>::Executor::execute(puppet, puppeter, msg, reply_address).await
+            {
+                self.reply_error(puppeter, err).await;
+            }
         } else {
-            Err(PuppetError::critical(
-                puppeter.pid,
-                "Packet has no message to handle",
-            ))
+            let err = puppeter.critical_error("Packet has no message");
+            self.reply_error(puppeter, err).await;
         }
     }
-    async fn reply_error(&mut self, err: PuppetError) {
+    async fn reply_error(&mut self, puppeter: &Puppeter, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
-            let _ = reply_address.send(Err(err));
+            if reply_address.send(Err(err)).is_err() {
+                let err = CriticalError::new(
+                    puppeter.pid,
+                    "Failed to send response over the oneshot channel",
+                );
+                puppeter.report_unrecoverable_failure(err);
+            }
         }
     }
 }

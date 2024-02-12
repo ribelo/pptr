@@ -408,6 +408,13 @@ impl Puppeter {
             .await
     }
 
+    pub fn report_unrecoverable_failure(&self, error: CriticalError) {
+        self.master_of_puppets
+            .failure_tx
+            .send(error)
+            .expect("Failed to report unrecoverable failure");
+    }
+
     #[async_recursion]
     pub async fn report_failure<P>(
         &self,
@@ -429,8 +436,9 @@ impl Puppeter {
         if master_pid == self.pid {
             match self.restart(puppet).await {
                 Ok(()) | Err(PuppetError::NonCritical(_)) => return Ok(()),
-                Err(PuppetError::Critical(_)) => {
-                    panic!("Failed to restart last puppet {}", self.pid)
+                Err(PuppetError::Critical(err)) => {
+                    self.report_unrecoverable_failure(err);
+                    Ok(())
                 }
             }
         } else if let Some(service_postman) = self

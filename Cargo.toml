@@ -13,6 +13,7 @@ indexmap = "2.1"
 rustc-hash = "1.1"
 anyhow = "1.0"
 async-recursion = "1.0"
+atomic-take = "1.1.0"
 
 [dev-dependencies]
 actix = "0.13.1"
