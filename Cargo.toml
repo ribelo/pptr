@@ -1,5 +1,5 @@
 [package]
-name = "master-of-puppets"
+name = "pptr"
 version = "0.1.57"
 edition = "2021"
 
@@ -27,7 +27,7 @@ crossbeam = { version = "0.8.2", features = ["crossbeam-channel"] }
 parking_lot = "0.12.1"
 
 [[bench]]
-name = "master_of_puppets_bench"
+name = "pptr_bench"
 harness = false
 
 [[bench]]

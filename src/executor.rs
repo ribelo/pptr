@@ -13,7 +13,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     errors::PuppetError,
     message::Message,
-    puppet::{Handler, Puppeter},
+    puppet::{Context, Handler},
 };
 
 #[async_trait]
@@ -23,7 +23,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Puppeter,
+        puppeter: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -43,7 +43,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Puppeter,
+        puppeter: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -79,7 +79,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Puppeter,
+        puppeter: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -240,7 +240,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Puppeter,
+        puppeter: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -250,7 +250,7 @@ where
         let cloned_puppet = puppet.clone();
         let cloned_puppeter = puppeter.clone();
         let _ = puppeter
-            .master_of_puppets
+            .pptr
             .executor
             .spawn(async move {
                 let mut local_puppet = cloned_puppet;
@@ -275,7 +275,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Puppeter,
+        puppeter: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -284,7 +284,7 @@ where
     {
         let cloned_puppet = puppet.clone();
         let cloned_puppeter = puppeter.clone();
-        puppeter.master_of_puppets.executor.spawn(async move {
+        puppeter.pptr.executor.spawn(async move {
             let mut local_puppet = cloned_puppet;
             let mut local_puppeter = cloned_puppeter;
             let _result = SequentialExecutor::execute(

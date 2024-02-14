@@ -12,9 +12,9 @@ use crate::{
         PuppetSendCommandError, PuppetSendMessageError,
     },
     executor::Executor,
-    master_of_puppets::MasterOfPuppets,
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
+    puppeter::Puppeter,
     supervision::{RetryConfig, SupervisionStrategy},
 };
 
@@ -23,19 +23,19 @@ use crate::{
 pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     type Supervision: SupervisionStrategy + Send + Sync;
 
-    async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError>;
+    async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError>;
 
-    async fn on_init(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
-        tracing::debug!(puppet = %type_name::<Self>(), "Initializing puppet");
+    async fn on_init(&mut self, ctx: &Context) -> Result<(), PuppetError> {
+        tracing::debug!(puppet = %ctx.pid, "Initializing puppet");
         Ok(())
     }
-    async fn on_start(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
-        tracing::debug!(puppet = %type_name::<Self>(), "Starting puppet" );
+    async fn on_start(&mut self, ctx: &Context) -> Result<(), PuppetError> {
+        tracing::debug!(puppet = %ctx.pid, "Starting puppet" );
         Ok(())
     }
 
-    async fn on_stop(&mut self, puppeter: &Puppeter) -> Result<(), PuppetError> {
-        tracing::debug!(puppet = %type_name::<Self>(), "Stopping puppet");
+    async fn on_stop(&mut self, ctx: &Context) -> Result<(), PuppetError> {
+        tracing::debug!(puppet = %ctx.pid, "Stopping puppet");
         Ok(())
     }
 }
@@ -54,9 +54,9 @@ pub enum LifecycleStatus {
 }
 
 #[derive(Clone, Debug)]
-pub struct Puppeter {
+pub struct Context {
     pub pid: Pid,
-    pub(crate) master_of_puppets: MasterOfPuppets,
+    pub(crate) pptr: Puppeter,
     pub(crate) retry_config: RetryConfig,
 }
 
@@ -99,23 +99,23 @@ where
         self
     }
 
-    pub async fn spawn(self, mop: &MasterOfPuppets) -> Result<Address<P>, PuppetError>
+    pub async fn spawn(self, pptr: &Puppeter) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
     {
-        mop.spawn::<P, P>(self).await
+        pptr.spawn::<P, P>(self).await
     }
 
-    pub async fn spawn_link<M>(self, mop: &MasterOfPuppets) -> Result<Address<P>, PuppetError>
+    pub async fn spawn_link<M>(self, pptr: &Puppeter) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
         M: Lifecycle,
     {
-        mop.spawn::<M, P>(self).await
+        pptr.spawn::<M, P>(self).await
     }
 }
 
-impl Puppeter {
+impl Context {
     pub(crate) async fn start<P>(
         &self,
         puppet: &mut P,
@@ -329,7 +329,7 @@ impl Puppeter {
     where
         P: Lifecycle,
     {
-        self.master_of_puppets.is_puppet_exists::<P>()
+        self.pptr.is_puppet_exists::<P>()
     }
 
     #[must_use]
@@ -338,11 +338,11 @@ impl Puppeter {
         P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
-        self.master_of_puppets.get_puppet_status_by_pid(puppet)
+        self.pptr.get_puppet_status_by_pid(puppet)
     }
 
     pub(crate) fn set_status(&self, status: LifecycleStatus) {
-        self.master_of_puppets.set_status_by_pid(self.pid, status);
+        self.pptr.set_status_by_pid(self.pid, status);
     }
 
     #[must_use]
@@ -353,8 +353,7 @@ impl Puppeter {
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
-        self.master_of_puppets
-            .puppet_has_puppet_by_pid(master_pid, puppet_pid)
+        self.pptr.puppet_has_puppet_by_pid(master_pid, puppet_pid)
     }
 
     #[must_use]
@@ -363,7 +362,7 @@ impl Puppeter {
         P: Lifecycle,
     {
         let puppet = Pid::new::<P>();
-        self.master_of_puppets.get_puppet_master_by_pid(puppet)
+        self.pptr.get_puppet_master_by_pid(puppet)
     }
 
     pub fn set_master<P, M>(&self) -> Result<(), PuppetOperationError>
@@ -373,7 +372,7 @@ impl Puppeter {
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
-        self.master_of_puppets
+        self.pptr
             .set_puppet_master_by_pid(self.pid, master_pid, puppet_pid)
     }
 
@@ -382,8 +381,7 @@ impl Puppeter {
         P: Lifecycle,
     {
         let puppet_pid = Pid::new::<P>();
-        self.master_of_puppets
-            .detach_puppet_by_pid(self.pid, puppet_pid)
+        self.pptr.detach_puppet_by_pid(self.pid, puppet_pid)
     }
 
     #[must_use]
@@ -394,7 +392,7 @@ impl Puppeter {
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
-        self.master_of_puppets
+        self.pptr
             .puppet_has_permission_by_pid(master_pid, puppet_pid)
     }
 
@@ -403,13 +401,11 @@ impl Puppeter {
         P: Lifecycle,
         B: Into<PuppetBuilder<P>> + Send,
     {
-        self.master_of_puppets
-            .spawn_puppet_by_pid::<P>(self.pid, builder)
-            .await
+        self.pptr.spawn_puppet_by_pid::<P>(self.pid, builder).await
     }
 
     pub fn report_unrecoverable_failure(&self, error: CriticalError) {
-        self.master_of_puppets
+        self.pptr
             .failure_tx
             .send(error)
             .expect("Failed to report unrecoverable failure");
@@ -441,10 +437,7 @@ impl Puppeter {
                     Ok(())
                 }
             }
-        } else if let Some(service_postman) = self
-            .master_of_puppets
-            .get_service_postman_by_pid(master_pid)
-        {
+        } else if let Some(service_postman) = self.pptr.get_service_postman_by_pid(master_pid) {
             service_postman
                 .send(
                     self.pid,
@@ -468,12 +461,8 @@ impl Puppeter {
             // Do nothing
             PuppetError::NonCritical(_) => {}
             PuppetError::Critical(_) => {
-                if let Err(err) = <P as Lifecycle>::Supervision::handle_failure(
-                    &self.master_of_puppets,
-                    self.pid,
-                    pid,
-                )
-                .await
+                if let Err(err) =
+                    <P as Lifecycle>::Supervision::handle_failure(&self.pptr, self.pid, pid).await
                 {
                     match err {
                         // Do nothing
@@ -493,7 +482,7 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        self.master_of_puppets.send::<P, E>(message).await
+        self.pptr.send::<P, E>(message).await
     }
 
     pub async fn ask<P, E>(&self, message: E) -> Result<ResponseFor<P, E>, PuppetSendMessageError>
@@ -501,7 +490,7 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        self.master_of_puppets.ask::<P, E>(message).await
+        self.pptr.ask::<P, E>(message).await
     }
 
     pub async fn ask_with_timeout<P, E>(
@@ -513,9 +502,7 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        self.master_of_puppets
-            .ask_with_timeout::<P, E>(message, duration)
-            .await
+        self.pptr.ask_with_timeout::<P, E>(message, duration).await
     }
 
     pub async fn send_command<P>(
@@ -533,7 +520,7 @@ impl Puppeter {
         puppet: Pid,
         command: ServiceCommand,
     ) -> Result<(), PuppetSendCommandError> {
-        self.master_of_puppets
+        self.pptr
             .send_command_by_pid(self.pid, puppet, command)
             .await
     }
@@ -575,7 +562,7 @@ impl Puppeter {
         let mut started_puppets = Vec::new();
 
         // Try to fetch the puppets by the given pid.
-        if let Some(puppets) = self.master_of_puppets.get_puppets_by_pid(self.pid) {
+        if let Some(puppets) = self.pptr.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet to start it.
             for puppet in puppets {
                 if self.pid == puppet {
@@ -614,7 +601,7 @@ impl Puppeter {
         let mut stopped_puppets = Vec::new();
 
         // Try to fetch the puppets by the given pid.
-        if let Some(puppets) = self.master_of_puppets.get_puppets_by_pid(self.pid) {
+        if let Some(puppets) = self.pptr.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet in reverse to stop it.
             for puppet in puppets.iter().rev() {
                 if self.pid == *puppet {
@@ -651,7 +638,7 @@ impl Puppeter {
         P: Lifecycle,
     {
         // Try to fetch the puppets by the given pid.
-        if let Some(puppets) = self.master_of_puppets.get_puppets_by_pid(self.pid) {
+        if let Some(puppets) = self.pptr.get_puppets_by_pid(self.pid) {
             // Iterate through each puppet in reverse to stop it.
             for pid in puppets.iter().rev() {
                 // Attempt to send the stop command to the current puppet.
@@ -686,7 +673,7 @@ where
     async fn handle_message(
         &mut self,
         msg: E,
-        puppeter: &Puppeter,
+        ctx: &Context,
     ) -> Result<Self::Response, PuppetError>;
 }
 

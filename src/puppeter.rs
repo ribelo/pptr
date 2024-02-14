@@ -25,7 +25,7 @@ use crate::{
     pid::{Id, Pid},
     prelude::CriticalError,
     puppet::{
-        Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, Puppeter, ResponseFor,
+        Context, Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, ResponseFor,
     },
     BoxedAny,
 };
@@ -38,7 +38,7 @@ pub type StatusChannels = (
 type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
 #[derive(Clone, Debug)]
-pub struct MasterOfPuppets {
+pub struct Puppeter {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
     pub(crate) service_postmans: Arc<Mutex<FxHashMap<Pid, ServicePostman>>>,
     pub(crate) statuses: Arc<Mutex<FxHashMap<Pid, StatusChannels>>>,
@@ -50,14 +50,14 @@ pub struct MasterOfPuppets {
     pub(crate) failure_rx: Arc<AtomicTake<mpsc::UnboundedReceiver<CriticalError>>>,
 }
 
-impl Default for MasterOfPuppets {
+impl Default for Puppeter {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[allow(clippy::expect_used)]
-impl MasterOfPuppets {
+impl Puppeter {
     #[must_use]
     pub fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -79,7 +79,7 @@ impl MasterOfPuppets {
     pub async fn on_unrecoverable_failure<F>(&self, f: F)
     where
         F: FnOnce(
-                MasterOfPuppets,
+                Puppeter,
                 CriticalError,
             ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
             + Send
@@ -545,9 +545,9 @@ impl MasterOfPuppets {
             ));
         };
 
-        let puppeter = Puppeter {
+        let puppeter = Context {
             pid,
-            master_of_puppets: self.clone(),
+            pptr: self.clone(),
             retry_config,
         };
 
@@ -562,7 +562,7 @@ impl MasterOfPuppets {
             pid,
             status_rx,
             message_tx: postman,
-            master_of_puppets: self.clone(),
+            pptr: self.clone(),
         };
 
         puppet.on_init(&puppeter).await?;
@@ -628,7 +628,7 @@ impl MasterOfPuppets {
 
 pub(crate) async fn run_puppet_loop<P>(
     mut puppet: P,
-    mut puppeter: Puppeter,
+    mut puppeter: Context,
     mut handle: PuppetHandle<P>,
 ) where
     P: Lifecycle,
@@ -706,12 +706,9 @@ mod tests {
     impl Lifecycle for MasterActor {
         type Supervision = OneForAll;
 
-        async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError> {
+        async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
             println!("Resetting MasterActor");
-            Err(CriticalError::new(
-                puppeter.pid,
-                "Failed to reset MasterActor",
-            ))
+            Err(CriticalError::new(ctx.pid, "Failed to reset MasterActor"))
         }
     }
 
@@ -724,8 +721,7 @@ mod tests {
     impl Lifecycle for PuppetActor {
         type Supervision = OneForAll;
 
-        async fn reset(&self, puppeter: &Puppeter) -> Result<Self, CriticalError> {
-            println!("Resetting PuppetActor");
+        async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
             Ok(Self {
                 failures: self.failures,
             })
@@ -751,7 +747,7 @@ mod tests {
         async fn handle_message(
             &mut self,
             _msg: MasterMessage,
-            _puppeter: &Puppeter,
+            _ctx: &Context,
         ) -> Result<Self::Response, PuppetError> {
             Ok(())
         }
@@ -764,7 +760,7 @@ mod tests {
         async fn handle_message(
             &mut self,
             _msg: PuppetMessage,
-            _puppeter: &Puppeter,
+            _ctx: &Context,
         ) -> Result<Self::Response, PuppetError> {
             Ok(())
         }
@@ -777,13 +773,13 @@ mod tests {
         async fn handle_message(
             &mut self,
             _msg: MasterFailingMessage,
-            puppeter: &Puppeter,
+            ctx: &Context,
         ) -> Result<Self::Response, PuppetError> {
             println!("Handling MasterFailingMessage. Failures: {}", self.failures);
             if self.failures < 3 {
                 self.failures += 1;
                 Err(PuppetError::critical(
-                    puppeter.pid,
+                    ctx.pid,
                     "Failed to handle MasterFailingMessage",
                 ))
             } else {
@@ -799,13 +795,13 @@ mod tests {
         async fn handle_message(
             &mut self,
             _msg: PuppetFailingMessage,
-            puppeter: &Puppeter,
+            ctx: &Context,
         ) -> Result<Self::Response, PuppetError> {
             println!("Handling MasterFailingMessage. Failures: {}", self.failures);
             if self.failures < 3 {
                 self.failures += 1;
                 Err(PuppetError::critical(
-                    puppeter.pid,
+                    ctx.pid,
                     "Failed to handle PuppetFailingMessage",
                 ))
             } else {
@@ -814,7 +810,7 @@ mod tests {
         }
     }
 
-    pub fn register_puppet<M, P>(mop: &MasterOfPuppets) -> Result<(), PuppetError>
+    pub fn register_puppet<M, P>(pptr: &Puppeter) -> Result<(), PuppetError>
     where
         M: Lifecycle,
         P: Lifecycle,
@@ -825,25 +821,25 @@ mod tests {
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(service_tx);
 
-        mop.register_puppet::<M, P>(postman, service_postman, status_tx, status_rx)
+        pptr.register_puppet::<M, P>(postman, service_postman, status_tx, status_rx)
     }
 
     #[tokio::test]
     async fn test_register() {
-        let mop = MasterOfPuppets::new();
+        let pptr = Puppeter::new();
 
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
 
         // Master puppet doesn't exist
 
         assert!(res.is_err());
 
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
 
         // Master is same as puppet
 
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
 
         // Puppet already exists
 
@@ -852,186 +848,186 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_puppet_exists() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
-        assert!(mop.is_puppet_exists::<PuppetActor>());
-        assert!(!mop.is_puppet_exists::<MasterActor>());
+        assert!(pptr.is_puppet_exists::<PuppetActor>());
+        assert!(!pptr.is_puppet_exists::<MasterActor>());
     }
 
     #[tokio::test]
     async fn test_get_postman() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
-        assert!(mop.get_postman::<PuppetActor>().is_some());
-        assert!(mop.get_postman::<MasterActor>().is_none());
+        assert!(pptr.get_postman::<PuppetActor>().is_some());
+        assert!(pptr.get_postman::<MasterActor>().is_none());
     }
 
     #[tokio::test]
     async fn test_get_service_postman_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop.get_service_postman_by_pid(puppet_pid).is_some());
+        assert!(pptr.get_service_postman_by_pid(puppet_pid).is_some());
         let master_pid = Pid::new::<MasterActor>();
-        assert!(mop.get_service_postman_by_pid(master_pid).is_none());
+        assert!(pptr.get_service_postman_by_pid(master_pid).is_none());
     }
 
     #[tokio::test]
     async fn test_get_status_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
         assert_eq!(
-            mop.get_puppet_status_by_pid(puppet_pid),
+            pptr.get_puppet_status_by_pid(puppet_pid),
             Some(LifecycleStatus::Inactive)
         );
         let master_pid = Pid::new::<MasterActor>();
-        assert!(mop.get_puppet_status_by_pid(master_pid).is_none());
+        assert!(pptr.get_puppet_status_by_pid(master_pid).is_none());
     }
 
     #[tokio::test]
     async fn test_set_status_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
-        mop.set_status_by_pid(puppet_pid, LifecycleStatus::Active);
+        pptr.set_status_by_pid(puppet_pid, LifecycleStatus::Active);
         assert_eq!(
-            mop.get_puppet_status_by_pid(puppet_pid),
+            pptr.get_puppet_status_by_pid(puppet_pid),
             Some(LifecycleStatus::Active)
         );
     }
 
     #[tokio::test]
     async fn test_subscribe_status_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
-        let rx = mop.subscribe_puppet_status_by_pid(puppet_pid).unwrap();
-        mop.set_status_by_pid(puppet_pid, LifecycleStatus::Active);
+        let rx = pptr.subscribe_puppet_status_by_pid(puppet_pid).unwrap();
+        pptr.set_status_by_pid(puppet_pid, LifecycleStatus::Active);
         assert_eq!(*rx.borrow(), LifecycleStatus::Active);
     }
 
     #[tokio::test]
     async fn test_has_puppet_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop
+        assert!(pptr
             .puppet_has_puppet_by_pid(master_pid, puppet_pid)
             .is_some());
         let master_pid = Pid::new::<PuppetActor>();
-        assert!(mop
+        assert!(pptr
             .puppet_has_puppet_by_pid(master_pid, puppet_pid)
             .is_none());
     }
 
     #[tokio::test]
     async fn test_has_permission_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop
+        assert!(pptr
             .puppet_has_permission_by_pid(master_pid, puppet_pid)
             .is_some());
         let master_pid = Pid::new::<PuppetActor>();
-        assert!(mop
+        assert!(pptr
             .puppet_has_permission_by_pid(master_pid, puppet_pid)
             .is_none());
     }
 
     #[tokio::test]
     async fn test_get_master_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert_eq!(mop.get_puppet_master_by_pid(puppet_pid), Some(master_pid));
-        assert_eq!(mop.get_puppet_master_by_pid(master_pid), Some(master_pid));
+        assert_eq!(pptr.get_puppet_master_by_pid(puppet_pid), Some(master_pid));
+        assert_eq!(pptr.get_puppet_master_by_pid(master_pid), Some(master_pid));
     }
 
     #[tokio::test]
     async fn test_set_master_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<PuppetActor, PuppetActor>(&mop);
+        let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop
+        assert!(pptr
             .set_puppet_master_by_pid(puppet_pid, master_pid, puppet_pid)
             .is_ok());
-        assert_eq!(mop.get_puppet_master_by_pid(puppet_pid), Some(master_pid));
-        assert_eq!(mop.get_puppet_master_by_pid(master_pid), Some(master_pid));
+        assert_eq!(pptr.get_puppet_master_by_pid(puppet_pid), Some(master_pid));
+        assert_eq!(pptr.get_puppet_master_by_pid(master_pid), Some(master_pid));
     }
 
     #[tokio::test]
     async fn test_get_puppets_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
         res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        let puppets = mop.get_puppets_by_pid(master_pid).unwrap();
+        let puppets = pptr.get_puppets_by_pid(master_pid).unwrap();
         assert_eq!(puppets.len(), 2);
         assert!(puppets.contains(&puppet_pid));
     }
 
     #[tokio::test]
     async fn test_detach_puppet_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
         res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop.detach_puppet_by_pid(master_pid, puppet_pid).is_ok());
-        assert_eq!(mop.get_puppet_master_by_pid(puppet_pid), Some(puppet_pid));
-        assert_eq!(mop.get_puppet_master_by_pid(master_pid), Some(master_pid));
+        assert!(pptr.detach_puppet_by_pid(master_pid, puppet_pid).is_ok());
+        assert_eq!(pptr.get_puppet_master_by_pid(puppet_pid), Some(puppet_pid));
+        assert_eq!(pptr.get_puppet_master_by_pid(master_pid), Some(master_pid));
     }
 
     #[tokio::test]
     async fn test_delete_puppet_by_pid() {
-        let mop = MasterOfPuppets::new();
-        let res = register_puppet::<MasterActor, MasterActor>(&mop);
+        let pptr = Puppeter::new();
+        let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
-        let res = register_puppet::<MasterActor, PuppetActor>(&mop);
+        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
         res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
-        assert!(mop.delete_puppet_by_pid(master_pid, puppet_pid).is_ok());
-        assert!(mop.get_postman::<PuppetActor>().is_none());
-        assert!(mop.get_postman::<MasterActor>().is_some());
+        assert!(pptr.delete_puppet_by_pid(master_pid, puppet_pid).is_ok());
+        assert!(pptr.get_postman::<PuppetActor>().is_none());
+        assert!(pptr.get_postman::<MasterActor>().is_some());
     }
 
     #[tokio::test]
     async fn test_spawn() {
-        let mop = MasterOfPuppets::new();
-        let res = mop
+        let pptr = Puppeter::new();
+        let res = pptr
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
-        let res = mop
+        let res = pptr
             .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap_err();
@@ -1039,64 +1035,48 @@ mod tests {
 
     #[tokio::test]
     async fn test_send() {
-        let mop = MasterOfPuppets::new();
-        let res = mop
+        let pptr = Puppeter::new();
+        let res = pptr
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
 
-        let res = mop.send::<PuppetActor, PuppetMessage>(PuppetMessage).await;
+        let res = pptr.send::<PuppetActor, PuppetMessage>(PuppetMessage).await;
         res.unwrap();
 
-        let res = mop.send::<MasterActor, MasterMessage>(MasterMessage).await;
+        let res = pptr.send::<MasterActor, MasterMessage>(MasterMessage).await;
         assert!(res.is_err());
     }
 
     #[tokio::test]
     async fn test_ask() {
-        let mop = MasterOfPuppets::new();
-        let res = mop
+        let pptr = Puppeter::new();
+        let res = pptr
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
 
-        let res = mop.ask::<PuppetActor, PuppetMessage>(PuppetMessage).await;
+        let res = pptr.ask::<PuppetActor, PuppetMessage>(PuppetMessage).await;
         res.unwrap();
 
-        let res = mop.ask::<MasterActor, MasterMessage>(MasterMessage).await;
+        let res = pptr.ask::<MasterActor, MasterMessage>(MasterMessage).await;
         assert!(res.is_err());
     }
 
     #[tokio::test]
     async fn test_ask_with_timeout() {
-        let mop = MasterOfPuppets::new();
-        let res = mop
+        let pptr = Puppeter::new();
+        let res = pptr
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         assert!(res.is_ok());
-        let res = mop
+        let res = pptr
             .ask_with_timeout::<PuppetActor, PuppetMessage>(PuppetMessage, Duration::from_secs(1))
             .await;
         assert!(res.is_ok());
-        let res = mop.send::<MasterActor, MasterMessage>(MasterMessage).await;
+        let res = pptr.send::<MasterActor, MasterMessage>(MasterMessage).await;
         assert!(res.is_err());
     }
-
-    // #[tokio::test]
-    // async fn test_send_command_stop_by_pid() {
-    //     let mop = MasterOfPuppets::new();
-    //     let res = mop
-    //         .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
-    //         .await;
-    //     assert!(res.is_ok());
-    //     let puppet_pid = Pid::new::<PuppetActor>();
-    //     let res = mop
-    //         .send_command_by_pid(puppet_pid, puppet_pid, ServiceCommand::Stop)
-    //         .await;
-    //     assert!(res.is_ok());
-    //     let status = mop.get_puppet_status_by_pid(puppet_pid);
-    //     assert_eq!(status, Some(LifecycleStatus::Inactive));
-    // }
 
     #[tokio::test]
     async fn self_mutate_puppet() {
@@ -1108,7 +1088,7 @@ mod tests {
         #[async_trait]
         impl Lifecycle for CounterPuppet {
             type Supervision = OneForAll;
-            async fn reset(&self, _puppeter: &Puppeter) -> Result<Self, CriticalError> {
+            async fn reset(&self, _puppeter: &Context) -> Result<Self, CriticalError> {
                 Ok(CounterPuppet::default())
             }
         }
@@ -1123,7 +1103,7 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _msg: IncrementCounter,
-                puppeter: &Puppeter,
+                puppeter: &Context,
             ) -> Result<Self::Response, PuppetError> {
                 println!("Counter: {}", self.counter.len());
                 if self.counter.len() < 10 {
@@ -1146,15 +1126,15 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _msg: DebugCounterPuppet,
-                _puppeter: &Puppeter,
+                _puppeter: &Context,
             ) -> Result<Self::Response, PuppetError> {
                 println!("Counter: {:?}", self.counter);
                 Ok(())
             }
         }
 
-        let mop = MasterOfPuppets::new();
-        let address = mop
+        let pptr = Puppeter::new();
+        let address = pptr
             .spawn::<CounterPuppet, CounterPuppet>(PuppetBuilder::new(CounterPuppet::default()))
             .await
             .unwrap();
@@ -1165,14 +1145,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_successful_recovery_after_failure() {
-        let mop = MasterOfPuppets::new();
-        let res = mop
+        let pptr = Puppeter::new();
+        let res = pptr
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
 
         loop {
-            let res = mop.ask::<PuppetActor, _>(PuppetFailingMessage).await;
+            let res = pptr.ask::<PuppetActor, _>(PuppetFailingMessage).await;
             if res.is_ok() {
                 break;
             }
@@ -1181,38 +1161,18 @@ mod tests {
     }
     #[tokio::test]
     async fn test_failed_recovery_after_failure() {
-        let mop = MasterOfPuppets::new();
-        let res = mop
+        let pptr = Puppeter::new();
+        let res = pptr
             .spawn_self::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
             .await;
         res.unwrap();
 
         loop {
-            let res = mop.ask::<MasterActor, _>(MasterFailingMessage).await;
+            let res = pptr.ask::<MasterActor, _>(MasterFailingMessage).await;
             if res.is_err() {
                 break;
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
-
-    // #[tokio::test]
-    // async fn test_send_command_restart_by_pid() {
-    //     let mop = MasterOfPuppets::new();
-    //     let res = mop
-    //         .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor {}))
-    //         .await;
-    //     assert!(res.is_ok());
-    //     let puppet_pid = Pid::new::<PuppetActor>();
-    //     let res = mop
-    //         .send_command_by_pid(
-    //             puppet_pid,
-    //             puppet_pid,
-    //             ServiceCommand::Restart { stage: None },
-    //         )
-    //         .await;
-    //     assert!(res.is_ok());
-    //     let status = mop.get_puppet_status_by_pid(puppet_pid).unwrap();
-    //     assert_eq!(status, LifecycleStatus::Active);
-    // }
 }

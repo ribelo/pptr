@@ -4,10 +4,10 @@ use tokio::sync::watch;
 
 use crate::{
     errors::{PostmanError, PuppetError},
-    master_of_puppets::MasterOfPuppets,
     message::{Message, Postman},
     pid::Pid,
     puppet::{Handler, Lifecycle, LifecycleStatus, PuppetBuilder, ResponseFor},
+    puppeter::Puppeter,
 };
 
 #[derive(Clone)]
@@ -18,7 +18,7 @@ where
     pub pid: Pid,
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
     pub(crate) message_tx: Postman<S>,
-    pub(crate) master_of_puppets: MasterOfPuppets,
+    pub(crate) pptr: Puppeter,
 }
 
 impl<S: Lifecycle> fmt::Debug for Address<S> {
@@ -96,7 +96,7 @@ where
     where
         P: Lifecycle,
     {
-        self.master_of_puppets.spawn::<S, P>(builder).await
+        self.pptr.spawn::<S, P>(builder).await
     }
 }
 

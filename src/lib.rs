@@ -4,10 +4,10 @@ use std::any::Any;
 pub mod address;
 pub mod errors;
 pub mod executor;
-pub mod master_of_puppets;
 pub mod message;
 pub mod pid;
 pub mod puppet;
+pub mod puppeter;
 pub mod supervision;
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
@@ -21,13 +21,13 @@ pub mod prelude {
     pub use crate::executor::DedicatedConcurrentExecutor;
     pub use crate::executor::DedicatedSequentialExecutor;
     pub use crate::executor::SequentialExecutor;
-    pub use crate::master_of_puppets::MasterOfPuppets;
     pub use crate::message::Message;
     pub use crate::pid::Pid;
+    pub use crate::puppet::Context;
     pub use crate::puppet::Handler;
     pub use crate::puppet::Lifecycle;
     pub use crate::puppet::Puppet;
     pub use crate::puppet::PuppetBuilder;
-    pub use crate::puppet::Puppeter;
+    pub use crate::puppeter::Puppeter;
     pub use crate::supervision::strategy::*;
 }

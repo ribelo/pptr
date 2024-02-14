@@ -8,9 +8,9 @@ use async_trait::async_trait;
 
 use crate::{
     errors::{PuppetError, RetryError},
-    master_of_puppets::MasterOfPuppets,
     message::ServiceCommand,
     pid::Pid,
+    puppeter::Puppeter,
 };
 
 pub mod strategy {
@@ -133,7 +133,7 @@ impl RetryConfig {
 #[async_trait]
 pub trait SupervisionStrategy: fmt::Debug {
     async fn handle_failure(
-        post_office: &MasterOfPuppets,
+        post_office: &Puppeter,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError>;
@@ -142,7 +142,7 @@ pub trait SupervisionStrategy: fmt::Debug {
 #[async_trait]
 impl SupervisionStrategy for strategy::OneToOne {
     async fn handle_failure(
-        post_office: &MasterOfPuppets,
+        post_office: &Puppeter,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError> {
@@ -155,7 +155,7 @@ impl SupervisionStrategy for strategy::OneToOne {
 #[async_trait]
 impl SupervisionStrategy for strategy::OneForAll {
     async fn handle_failure(
-        post_office: &MasterOfPuppets,
+        post_office: &Puppeter,
         master: Pid,
         _puppet: Pid,
     ) -> Result<(), PuppetError> {
@@ -173,7 +173,7 @@ impl SupervisionStrategy for strategy::OneForAll {
 #[async_trait]
 impl SupervisionStrategy for strategy::RestForOne {
     async fn handle_failure(
-        post_office: &MasterOfPuppets,
+        post_office: &Puppeter,
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError> {

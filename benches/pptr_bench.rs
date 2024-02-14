@@ -1,71 +1,70 @@
 use async_trait::async_trait;
 use criterion::{criterion_group, criterion_main, Criterion};
-use master_of_puppets::{
+use pptr::{
     errors::PuppetError,
     executor::{ConcurrentExecutor, SequentialExecutor},
-    master_of_puppets::MasterOfPuppets,
     message::Message,
-    puppet::{Handler, Lifecycle, PuppetBuilder, Puppeter},
+    puppet::{Handler, Lifecycle, PuppetBuilder},
     supervision::strategy::OneForAll,
 };
 
-#[derive(Clone, Debug)]
-struct PingMessage(usize);
-
-impl Message for PingMessage {}
-
-#[derive(Clone, Default)]
-struct PingActor {
-    count: usize,
-}
-
-impl Lifecycle for PingActor {
-    type Supervision = OneForAll;
-}
-
-#[derive(Clone, Default)]
-struct ConcurrentPingActor {
-    count: usize,
-}
-
-impl Lifecycle for ConcurrentPingActor {
-    type Supervision = OneForAll;
-}
-
-#[derive(Clone, Default)]
-struct ParallelPingActor {
-    count: usize,
-}
-
-// impl Lifecycle for ParallelPingActor {}
-
-#[async_trait]
-impl Handler<PingMessage> for PingActor {
-    type Response = usize;
-    type Executor = SequentialExecutor;
-    async fn handle_message(
-        &mut self,
-        msg: PingMessage,
-        puppeter: &Puppeter,
-    ) -> Result<usize, PuppetError> {
-        self.count += msg.0;
-        Ok(self.count)
-    }
-}
-
-#[async_trait]
-impl Handler<PingMessage> for ConcurrentPingActor {
-    type Response = usize;
-    type Executor = ConcurrentExecutor;
-    async fn handle_message(
-        &mut self,
-        msg: PingMessage,
-        puppeter: &Puppeter,
-    ) -> Result<usize, PuppetError> {
-        self.count += msg.0;
-        Ok(self.count)
-    }
-}
+// #[derive(Clone, Debug)]
+// struct PingMessage(usize);
+//
+// impl Message for PingMessage {}
+//
+// #[derive(Clone, Default)]
+// struct PingActor {
+//     count: usize,
+// }
+//
+// impl Lifecycle for PingActor {
+//     type Supervision = OneForAll;
+// }
+//
+// #[derive(Clone, Default)]
+// struct ConcurrentPingActor {
+//     count: usize,
+// }
+//
+// impl Lifecycle for ConcurrentPingActor {
+//     type Supervision = OneForAll;
+// }
+//
+// #[derive(Clone, Default)]
+// struct ParallelPingActor {
+//     count: usize,
+// }
+//
+// // impl Lifecycle for ParallelPingActor {}
+//
+// #[async_trait]
+// impl Handler<PingMessage> for PingActor {
+//     type Response = usize;
+//     type Executor = SequentialExecutor;
+//     async fn handle_message(
+//         &mut self,
+//         msg: PingMessage,
+//         puppeter: &Puppeter,
+//     ) -> Result<usize, PuppetError> {
+//         self.count += msg.0;
+//         Ok(self.count)
+//     }
+// }
+//
+// #[async_trait]
+// impl Handler<PingMessage> for ConcurrentPingActor {
+//     type Response = usize;
+//     type Executor = ConcurrentExecutor;
+//     async fn handle_message(
+//         &mut self,
+//         msg: PingMessage,
+//         puppeter: &Puppeter,
+//     ) -> Result<usize, PuppetError> {
+//         self.count += msg.0;
+//         Ok(self.count)
+//     }
+// }
 
 // #[cfg(feature = "rayon")]
 // #[async_trait]
@@ -79,66 +78,66 @@ impl Handler<PingMessage> for ConcurrentPingActor {
 // }
 
 fn benchmarks(c: &mut Criterion) {
-    let runtime = tokio::runtime::Runtime::new().unwrap();
-    c.bench_function("minion send ping 1e5", |b| {
-        b.iter(|| {
-            runtime.block_on(async {
-                let post_office = MasterOfPuppets::new();
-                let actor =
-                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
-
-                let _address = actor.spawn().await.unwrap();
-                for i in 0..100_000 {
-                    post_office
-                        .send::<PingActor, _>(PingMessage(10))
-                        .await
-                        .unwrap();
-                }
-            })
-        })
-    });
-    c.bench_function("minion address send ping 1e5", |b| {
-        b.iter(|| {
-            runtime.block_on(async {
-                let post_office = MasterOfPuppets::new();
-                let actor =
-                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
-                let address = actor.spawn().await.unwrap();
-                for _ in 0..100_000 {
-                    address.send(PingMessage(10)).await.unwrap();
-                }
-            })
-        })
-    });
-    c.bench_function("minion ask ping 1e5", |b| {
-        b.iter(|| {
-            runtime.block_on(async {
-                let post_office = MasterOfPuppets::new();
-                let actor =
-                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
-                let address = actor.spawn().await.unwrap();
-                for _ in 0..100_000 {
-                    post_office
-                        .ask::<PingActor, _>(PingMessage(10))
-                        .await
-                        .unwrap();
-                }
-            })
-        })
-    });
-    c.bench_function("minion address ask ping 1e5", |b| {
-        b.iter(|| {
-            runtime.block_on(async {
-                let post_office = MasterOfPuppets::new();
-                let actor =
-                    PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
-                let address = actor.spawn().await.unwrap();
-                for _ in 0..100_000 {
-                    address.ask(PingMessage(10)).await.unwrap();
-                }
-            })
-        })
-    });
+    // let runtime = tokio::runtime::Runtime::new().unwrap();
+    // c.bench_function("minion send ping 1e5", |b| {
+    //     b.iter(|| {
+    //         runtime.block_on(async {
+    //             let post_office = MasterOfPuppets::new();
+    //             let actor =
+    //                 PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+    //
+    //             let _address = actor.spawn().await.unwrap();
+    //             for i in 0..100_000 {
+    //                 post_office
+    //                     .send::<PingActor, _>(PingMessage(10))
+    //                     .await
+    //                     .unwrap();
+    //             }
+    //         })
+    //     })
+    // });
+    // c.bench_function("minion address send ping 1e5", |b| {
+    //     b.iter(|| {
+    //         runtime.block_on(async {
+    //             let post_office = MasterOfPuppets::new();
+    //             let actor =
+    //                 PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+    //             let address = actor.spawn().await.unwrap();
+    //             for _ in 0..100_000 {
+    //                 address.send(PingMessage(10)).await.unwrap();
+    //             }
+    //         })
+    //     })
+    // });
+    // c.bench_function("minion ask ping 1e5", |b| {
+    //     b.iter(|| {
+    //         runtime.block_on(async {
+    //             let post_office = MasterOfPuppets::new();
+    //             let actor =
+    //                 PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+    //             let address = actor.spawn().await.unwrap();
+    //             for _ in 0..100_000 {
+    //                 post_office
+    //                     .ask::<PingActor, _>(PingMessage(10))
+    //                     .await
+    //                     .unwrap();
+    //             }
+    //         })
+    //     })
+    // });
+    // c.bench_function("minion address ask ping 1e5", |b| {
+    //     b.iter(|| {
+    //         runtime.block_on(async {
+    //             let post_office = MasterOfPuppets::new();
+    //             let actor =
+    //                 PuppetBuilder::new(PingActor { count: 10 }).with_post_office(&post_office);
+    //             let address = actor.spawn().await.unwrap();
+    //             for _ in 0..100_000 {
+    //                 address.ask(PingMessage(10)).await.unwrap();
+    //             }
+    //         })
+    //     })
+    // });
     // c.bench_function("minion concurrent send ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
