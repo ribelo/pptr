@@ -1,7 +1,14 @@
 [package]
 name = "pptr"
+description = "Type-Driven Asynchronous Actor Runtime"
+license = "Unlicense"
 version = "0.1.57"
+authors = ["Rafał Krzyważnia <r.krzywaznia@gmail.com>"]
 edition = "2021"
+readme = "README.md"
+repository = "https://github.com/ribelo/pptr"
+
+[desc]
 
 [dependencies]
 async-trait = "0.1"
