@@ -5,9 +5,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     errors::{PostmanError, PuppetError},
-    executor::Executor,
+    executor::{ConcurrentExecutor, DedicatedConcurrentExecutor, Executor, SequentialExecutor},
     pid::Pid,
-    prelude::CriticalError,
+    prelude::{CriticalError, ExecutorType},
     puppet::{Context, Handler, Lifecycle, ResponseFor},
 };
 
@@ -69,9 +69,17 @@ where
     async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context) {
         if let Some(msg) = self.message.take() {
             let reply_address = self.reply_address.take();
-            if let Err(err) =
-                <P as Handler<E>>::Executor::execute(puppet, ctx, msg, reply_address).await
-            {
+            if let Err(err) = match ctx.executor {
+                ExecutorType::Sequential => {
+                    SequentialExecutor::execute(puppet, ctx, msg, reply_address).await
+                }
+                ExecutorType::Concurrent => {
+                    ConcurrentExecutor::execute(puppet, ctx, msg, reply_address).await
+                }
+                ExecutorType::Dedicated => {
+                    DedicatedConcurrentExecutor::execute(puppet, ctx, msg, reply_address).await
+                }
+            } {
                 self.reply_error(ctx, err).await;
             }
         } else {
@@ -297,13 +305,13 @@ impl ServicePostman {
                 Err(PostmanError::ResponseReceiveError { puppet }),
                 |inner_res| {
                     inner_res.map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
-                        res.map_err(std::convert::Into::into)
+                        res.map_err(PostmanError::from)
                     })
                 },
             )
         } else {
             (res_rx.await).map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
-                res.map_err(std::convert::Into::into)
+                res.map_err(PostmanError::from)
             })
         }
     }
