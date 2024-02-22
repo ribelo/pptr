@@ -11,7 +11,7 @@ use crate::{
         CriticalError, PuppetDoesNotExistError, PuppetError, PuppetOperationError,
         PuppetSendCommandError, PuppetSendMessageError,
     },
-    executor::{Executor, ExecutorType},
+    executor::Executor,
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
     puppeter::Puppeter,
@@ -57,7 +57,6 @@ pub enum LifecycleStatus {
 pub struct Context {
     pub pid: Pid,
     pub(crate) pptr: Puppeter,
-    pub(crate) executor: ExecutorType,
     pub(crate) retry_config: RetryConfig,
 }
 
@@ -70,7 +69,6 @@ where
     pub messages_buffer_size: NonZeroUsize,
     pub commands_buffer_size: NonZeroUsize,
     pub retry_config: Option<RetryConfig>,
-    pub executor: Option<ExecutorType>,
 }
 
 impl<P> PuppetBuilder<P>
@@ -86,7 +84,6 @@ where
             // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
             commands_buffer_size: unsafe { NonZeroUsize::new_unchecked(16) },
             retry_config: Some(RetryConfig::default()),
-            executor: None,
         }
     }
 
@@ -99,12 +96,6 @@ where
     #[must_use]
     pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.commands_buffer_size = size;
-        self
-    }
-
-    #[must_use]
-    pub fn executor(mut self, executor: ExecutorType) -> Self {
-        self.executor = Some(executor);
         self
     }
 
@@ -677,6 +668,7 @@ where
     E: Message,
 {
     type Response: Send + 'static;
+    type Executor: Executor<E> + Send + 'static;
 
     async fn handle_message(
         &mut self,

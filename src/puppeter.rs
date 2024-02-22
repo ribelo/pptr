@@ -17,7 +17,7 @@ use crate::{
         PuppetDoesNotExistError, PuppetError, PuppetOperationError, PuppetSendCommandError,
         PuppetSendMessageError, ResourceAlreadyExist,
     },
-    executor::{DedicatedExecutor, ExecutorType},
+    executor::DedicatedExecutor,
     message::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
@@ -42,7 +42,6 @@ pub struct Puppeter {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
     pub(crate) service_postmans: Arc<Mutex<FxHashMap<Pid, ServicePostman>>>,
     pub(crate) statuses: Arc<Mutex<FxHashMap<Pid, StatusChannels>>>,
-    pub(crate) executors_mappings: Arc<Mutex<FxHashMap<Pid, ExecutorType>>>,
     pub(crate) master_to_puppets: Arc<Mutex<FxHashMap<Pid, FxIndexSet<Pid>>>>,
     pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
     pub(crate) resources: Arc<Mutex<FxHashMap<Id, BoxedAny>>>,
@@ -68,7 +67,6 @@ impl Puppeter {
             message_postmans: Arc::default(),
             service_postmans: Arc::default(),
             statuses: Arc::default(),
-            executors_mappings: Arc::default(),
             master_to_puppets: Arc::default(),
             puppet_to_master: Arc::default(),
             resources: Arc::default(),
@@ -102,8 +100,8 @@ impl Puppeter {
         &self,
         postman: Postman<P>,
         service_postman: ServicePostman,
-        status_channels: StatusChannels,
-        executor: ExecutorType,
+        status_tx: watch::Sender<LifecycleStatus>,
+        status_rx: watch::Receiver<LifecycleStatus>,
     ) -> Result<(), PuppetError>
     where
         M: Lifecycle,
@@ -111,7 +109,7 @@ impl Puppeter {
     {
         // Create Pid references for the master and puppet
         let master = Pid::new::<M>();
-        self.register_puppet_by_pid(master, postman, service_postman, status_channels, executor)
+        self.register_puppet_by_pid(master, postman, service_postman, status_tx, status_rx)
     }
 
     pub(crate) fn register_puppet_by_pid<P>(
@@ -119,8 +117,8 @@ impl Puppeter {
         master: Pid,
         postman: Postman<P>,
         service_postman: ServicePostman,
-        status_channels: StatusChannels,
-        executor: ExecutorType,
+        status_tx: watch::Sender<LifecycleStatus>,
+        status_rx: watch::Receiver<LifecycleStatus>,
     ) -> Result<(), PuppetError>
     where
         P: Lifecycle,
@@ -168,13 +166,7 @@ impl Puppeter {
         self.statuses
             .lock()
             .expect("Failed to acquire mutex lock")
-            .insert(puppet, status_channels);
-
-        // Add the puppet's executor to the executors_mappings map
-        self.executors_mappings
-            .lock()
-            .expect("Failed to acquire mutex lock")
-            .insert(puppet, executor);
+            .insert(puppet, (status_tx, status_rx));
 
         // Return a successful result indicating the registration was successful
         Ok(())
@@ -417,6 +409,7 @@ impl Puppeter {
                     .expect("Failed to acquire mutex lock")
                     .remove(&puppet);
 
+                // TODO: Break loop
                 Ok(())
             }
         }
@@ -499,7 +492,7 @@ impl Puppeter {
     }
 
     #[allow(clippy::impl_trait_in_params)]
-    pub async fn spawn_orphaned<P>(
+    pub async fn spawn_self<P>(
         &self,
         builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
@@ -532,20 +525,18 @@ impl Puppeter {
         };
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
-        let status_channels = (status_tx, status_rx.clone());
         let (message_tx, message_rx) =
             mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_buffer_size.into());
         let (command_tx, command_rx) =
             mpsc::channel::<ServicePacket>(builder.commands_buffer_size.into());
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
-        let executor = builder.executor.take().unwrap_or_default();
         self.register_puppet_by_pid::<P>(
             master_pid,
             postman.clone(),
             service_postman,
-            status_channels,
-            executor,
+            status_tx,
+            status_rx.clone(),
         )?;
         let Some(retry_config) = builder.retry_config.take() else {
             return Err(PuppetError::critical(
@@ -554,10 +545,9 @@ impl Puppeter {
             ));
         };
 
-        let ctx = Context {
+        let puppeter = Context {
             pid,
             pptr: self.clone(),
-            executor,
             retry_config,
         };
 
@@ -575,10 +565,10 @@ impl Puppeter {
             pptr: self.clone(),
         };
 
-        puppet.on_init(&ctx).await?;
-        ctx.start(&mut puppet, false).await?;
+        puppet.on_init(&puppeter).await?;
+        puppeter.start(&mut puppet, false).await?;
 
-        tokio::spawn(run_puppet_loop(puppet, ctx, handle));
+        tokio::spawn(run_puppet_loop(puppet, puppeter, handle));
         Ok(address)
     }
 
@@ -649,10 +639,9 @@ pub(crate) async fn run_puppet_loop<P>(
         tokio::select! {
             res = puppet_status.changed() => {
                 if let Ok(()) = res {
-                    let status = *puppet_status.borrow();
                     if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
                         | LifecycleStatus::Failed) {
-                        tracing::warn!(puppet = %puppeter.pid, "Stopping loop due to puppet status change: {status}");
+                        tracing::info!(puppet = %puppeter.pid, "Stopping loop due to puppet status change");
                         break;
                     }
                 } else {
@@ -754,6 +743,7 @@ mod tests {
     #[async_trait]
     impl Handler<MasterMessage> for MasterActor {
         type Response = ();
+        type Executor = SequentialExecutor;
         async fn handle_message(
             &mut self,
             _msg: MasterMessage,
@@ -766,6 +756,7 @@ mod tests {
     #[async_trait]
     impl Handler<PuppetMessage> for PuppetActor {
         type Response = ();
+        type Executor = SequentialExecutor;
         async fn handle_message(
             &mut self,
             _msg: PuppetMessage,
@@ -778,6 +769,7 @@ mod tests {
     #[async_trait]
     impl Handler<MasterFailingMessage> for MasterActor {
         type Response = ();
+        type Executor = SequentialExecutor;
         async fn handle_message(
             &mut self,
             _msg: MasterFailingMessage,
@@ -799,6 +791,7 @@ mod tests {
     #[async_trait]
     impl Handler<PuppetFailingMessage> for PuppetActor {
         type Response = ();
+        type Executor = SequentialExecutor;
         async fn handle_message(
             &mut self,
             _msg: PuppetFailingMessage,
@@ -824,16 +817,11 @@ mod tests {
     {
         let (message_tx, _message_rx) = mpsc::channel::<Box<dyn Envelope<P>>>(1);
         let (service_tx, _service_rx) = mpsc::channel::<ServicePacket>(1);
-        let status_channels = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
+        let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(service_tx);
 
-        pptr.register_puppet::<M, P>(
-            postman,
-            service_postman,
-            status_channels,
-            ExecutorType::default(),
-        )
+        pptr.register_puppet::<M, P>(postman, service_postman, status_tx, status_rx)
     }
 
     #[tokio::test]
@@ -1111,6 +1099,7 @@ mod tests {
         #[async_trait]
         impl Handler<IncrementCounter> for CounterPuppet {
             type Response = ();
+            type Executor = SequentialExecutor;
             async fn handle_message(
                 &mut self,
                 _msg: IncrementCounter,
@@ -1133,6 +1122,7 @@ mod tests {
         #[async_trait]
         impl Handler<DebugCounterPuppet> for CounterPuppet {
             type Response = ();
+            type Executor = SequentialExecutor;
             async fn handle_message(
                 &mut self,
                 _msg: DebugCounterPuppet,
@@ -1173,7 +1163,7 @@ mod tests {
     async fn test_failed_recovery_after_failure() {
         let pptr = Puppeter::new();
         let res = pptr
-            .spawn_orphaned::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
+            .spawn_self::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
             .await;
         res.unwrap();
 
