@@ -297,13 +297,13 @@ impl ServicePostman {
                 Err(PostmanError::ResponseReceiveError { puppet }),
                 |inner_res| {
                     inner_res.map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
-                        res.map_err(std::convert::Into::into)
+                        res.map_err(PostmanError::from)
                     })
                 },
             )
         } else {
             (res_rx.await).map_or(Err(PostmanError::ResponseReceiveError { puppet }), |res| {
-                res.map_err(std::convert::Into::into)
+                res.map_err(PostmanError::from)
             })
         }
     }

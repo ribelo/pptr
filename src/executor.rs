@@ -33,7 +33,6 @@ where
 
 pub struct SequentialExecutor;
 pub struct ConcurrentExecutor;
-pub struct DedicatedSequentialExecutor;
 pub struct DedicatedConcurrentExecutor;
 
 #[async_trait]
@@ -230,41 +229,6 @@ impl DedicatedExecutor {
             let _ = tx.send(task);
         }
         Job { cancel, rx }
-    }
-}
-
-#[async_trait]
-impl<E> Executor<E> for DedicatedSequentialExecutor
-where
-    E: Message,
-{
-    async fn execute<P>(
-        puppet: &mut P,
-        puppeter: &mut Context,
-        msg: E,
-        reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
-    ) -> Result<(), PuppetError>
-    where
-        P: Handler<E> + Clone,
-    {
-        let cloned_puppet = puppet.clone();
-        let cloned_puppeter = puppeter.clone();
-        let _ = puppeter
-            .pptr
-            .executor
-            .spawn(async move {
-                let mut local_puppet = cloned_puppet;
-                let mut local_puppeter = cloned_puppeter;
-                let _result = SequentialExecutor::execute(
-                    &mut local_puppet,
-                    &mut local_puppeter,
-                    msg,
-                    reply_address,
-                )
-                .await;
-            })
-            .await;
-        Ok(())
     }
 }
 

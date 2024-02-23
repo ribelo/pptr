@@ -19,7 +19,6 @@ pub mod prelude {
     pub use crate::errors::PuppetError;
     pub use crate::executor::ConcurrentExecutor;
     pub use crate::executor::DedicatedConcurrentExecutor;
-    pub use crate::executor::DedicatedSequentialExecutor;
     pub use crate::executor::SequentialExecutor;
     pub use crate::message::Message;
     pub use crate::pid::Pid;
