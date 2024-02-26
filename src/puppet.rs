@@ -9,7 +9,7 @@ use crate::{
     address::Address,
     errors::{
         CriticalError, PuppetDoesNotExistError, PuppetError, PuppetOperationError,
-        PuppetSendCommandError, PuppetSendMessageError,
+        PuppetSendCommandError, PuppetSendMessageError, ResourceAlreadyExist,
     },
     executor::Executor,
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
@@ -650,6 +650,45 @@ impl Context {
             }
         };
         Ok(())
+    }
+
+    pub fn add_resource<T>(&self, resource: T) -> Result<(), ResourceAlreadyExist>
+    where
+        T: Send + Sync + Clone + 'static,
+    {
+        self.pptr.add_resource(resource)
+    }
+
+    #[must_use]
+    pub fn get_resource<T>(&self) -> Option<T>
+    where
+        T: Send + Sync + Clone + 'static,
+    {
+        self.pptr.get_resource::<T>()
+    }
+
+    pub fn with_resource<T, F, R>(&self, f: F) -> Option<R>
+    where
+        T: Send + Sync + Clone + 'static,
+        F: FnOnce(&T) -> R,
+    {
+        self.pptr.with_resource::<T, F, R>(f)
+    }
+
+    pub fn with_resource_mut<T, F, R>(&self, f: F) -> Option<R>
+    where
+        T: Send + Sync + Clone + 'static,
+        F: FnOnce(&mut T) -> R,
+    {
+        self.pptr.with_resource_mut::<T, F, R>(f)
+    }
+
+    #[must_use]
+    pub fn expect_resource<T>(&self) -> T
+    where
+        T: Send + Sync + Clone + 'static,
+    {
+        self.pptr.expect_resource::<T>()
     }
 
     pub fn non_critical_error<E: ToString + ?Sized>(&self, error: &E) -> PuppetError {

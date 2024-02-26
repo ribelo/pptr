@@ -617,6 +617,19 @@ impl Puppeter {
             .map(f)
     }
 
+    pub fn with_resource_mut<T, F, R>(&self, f: F) -> Option<R>
+    where
+        T: Send + Sync + Clone + 'static,
+        F: FnOnce(&mut T) -> R,
+    {
+        self.resources
+            .lock()
+            .expect("Failed to acquire mutex lock")
+            .get_mut(&Id::new::<T>())
+            .and_then(|boxed| boxed.downcast_mut::<T>())
+            .map(f)
+    }
+
     #[must_use]
     pub fn expect_resource<T>(&self) -> T
     where
@@ -1174,5 +1187,14 @@ mod tests {
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    async fn test_add_resouce() {
+        let pptr = Puppeter::new();
+        pptr.add_resource::<i32>(10).unwrap();
+        pptr.with_resource::<i32, _, _>(|res| {
+            assert_eq!(*res, 10);
+        });
     }
 }
