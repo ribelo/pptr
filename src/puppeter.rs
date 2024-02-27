@@ -44,7 +44,7 @@ pub struct Puppeter {
     pub(crate) statuses: Arc<Mutex<FxHashMap<Pid, StatusChannels>>>,
     pub(crate) master_to_puppets: Arc<Mutex<FxHashMap<Pid, FxIndexSet<Pid>>>>,
     pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
-    pub(crate) resources: Arc<RwLock<FxHashMap<Id, BoxedAny>>>,
+    pub(crate) resources: Arc<Mutex<FxHashMap<Id, Arc<Mutex<BoxedAny>>>>>,
     pub(crate) executor: DedicatedExecutor,
     pub(crate) failure_tx: mpsc::UnboundedSender<CriticalError>,
     pub(crate) failure_rx: Arc<AtomicTake<mpsc::UnboundedReceiver<CriticalError>>>,
@@ -579,11 +579,11 @@ impl Puppeter {
         let id = Id::new::<T>();
         if let std::collections::hash_map::Entry::Vacant(e) = self
             .resources
-            .write()
+            .lock()
             .expect("Failed to acquire mutex lock")
             .entry(id)
         {
-            e.insert(Box::new(resource));
+            e.insert(Arc::new(Mutex::new(Box::new(resource))));
             Ok(())
         } else {
             Err(ResourceAlreadyExist)
@@ -595,13 +595,17 @@ impl Puppeter {
     where
         T: Send + Sync + Clone + 'static,
     {
-        let id = Id::new::<T>();
-        self.resources
-            .read()
-            .expect("Failed to acquire mutex lock")
-            .get(&id)
-            .and_then(|boxed| boxed.downcast_ref::<T>())
-            .cloned()
+        let resource = {
+            let id = Id::new::<T>();
+            let resources_guard = self.resources.lock().expect("Failed to acquire mutex lock");
+            Arc::clone(resources_guard.get(&id)?)
+        };
+
+        let boxed = resource
+            .lock()
+            .expect("Failed to acquire mutex lock on resource");
+        let any_ref = boxed.downcast_ref::<T>()?;
+        Some(any_ref.clone())
     }
 
     pub fn with_resource<T, F, R>(&self, f: F) -> Option<R>
@@ -609,12 +613,17 @@ impl Puppeter {
         T: Send + Sync + Clone + 'static,
         F: FnOnce(&T) -> R,
     {
-        self.resources
-            .read()
-            .expect("Failed to acquire mutex lock")
-            .get(&Id::new::<T>())
-            .and_then(|boxed| boxed.downcast_ref::<T>())
-            .map(f)
+        let resource = {
+            let id = Id::new::<T>();
+            let resources_guard = self.resources.lock().expect("Failed to acquire mutex lock");
+            Arc::clone(resources_guard.get(&id)?)
+        };
+
+        let boxed = resource
+            .lock()
+            .expect("Failed to acquire mutex lock on resource");
+        let any_ref = boxed.downcast_ref::<T>()?;
+        Some(f(any_ref))
     }
 
     pub fn with_resource_mut<T, F, R>(&self, f: F) -> Option<R>
@@ -622,12 +631,17 @@ impl Puppeter {
         T: Send + Sync + Clone + 'static,
         F: FnOnce(&mut T) -> R,
     {
-        self.resources
-            .write()
-            .expect("Failed to acquire mutex lock")
-            .get_mut(&Id::new::<T>())
-            .and_then(|boxed| boxed.downcast_mut::<T>())
-            .map(f)
+        let resource = {
+            let id = Id::new::<T>();
+            let resources_guard = self.resources.lock().expect("Failed to acquire mutex lock");
+            Arc::clone(resources_guard.get(&id)?)
+        };
+
+        let mut boxed = resource
+            .lock()
+            .expect("Failed to acquire mutex lock on resource");
+        let any_mut = boxed.downcast_mut::<T>()?;
+        Some(f(any_mut))
     }
 
     #[must_use]
