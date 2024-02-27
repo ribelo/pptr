@@ -2,7 +2,7 @@ use std::{
     hash::BuildHasherDefault,
     num::NonZeroUsize,
     pin::Pin,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use atomic_take::AtomicTake;
@@ -44,7 +44,7 @@ pub struct Puppeter {
     pub(crate) statuses: Arc<Mutex<FxHashMap<Pid, StatusChannels>>>,
     pub(crate) master_to_puppets: Arc<Mutex<FxHashMap<Pid, FxIndexSet<Pid>>>>,
     pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
-    pub(crate) resources: Arc<Mutex<FxHashMap<Id, BoxedAny>>>,
+    pub(crate) resources: Arc<RwLock<FxHashMap<Id, BoxedAny>>>,
     pub(crate) executor: DedicatedExecutor,
     pub(crate) failure_tx: mpsc::UnboundedSender<CriticalError>,
     pub(crate) failure_rx: Arc<AtomicTake<mpsc::UnboundedReceiver<CriticalError>>>,
@@ -579,7 +579,7 @@ impl Puppeter {
         let id = Id::new::<T>();
         if let std::collections::hash_map::Entry::Vacant(e) = self
             .resources
-            .lock()
+            .write()
             .expect("Failed to acquire mutex lock")
             .entry(id)
         {
@@ -597,7 +597,7 @@ impl Puppeter {
     {
         let id = Id::new::<T>();
         self.resources
-            .lock()
+            .read()
             .expect("Failed to acquire mutex lock")
             .get(&id)
             .and_then(|boxed| boxed.downcast_ref::<T>())
@@ -610,7 +610,7 @@ impl Puppeter {
         F: FnOnce(&T) -> R,
     {
         self.resources
-            .lock()
+            .read()
             .expect("Failed to acquire mutex lock")
             .get(&Id::new::<T>())
             .and_then(|boxed| boxed.downcast_ref::<T>())
@@ -623,7 +623,7 @@ impl Puppeter {
         F: FnOnce(&mut T) -> R,
     {
         self.resources
-            .lock()
+            .write()
             .expect("Failed to acquire mutex lock")
             .get_mut(&Id::new::<T>())
             .and_then(|boxed| boxed.downcast_mut::<T>())
