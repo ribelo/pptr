@@ -30,13 +30,37 @@ use crate::{
     BoxedAny,
 };
 
+/// Type alias for a tuple containing a `watch::Sender<LifecycleStatus>` and `watch::Receiver<LifecycleStatus>`.
+///
+/// `StatusChannels` is used for monitoring the lifecycle statuses of all actors in a system.
+/// The `watch::Sender<LifecycleStatus>` is used for broadcasting status updates, while the receiver end can be subscribed
+/// to in order to observe these status changes.
 pub type StatusChannels = (
     watch::Sender<LifecycleStatus>,
     watch::Receiver<LifecycleStatus>,
 );
 
+/// `FxIndexSet` is an alias for `IndexSet` from the `indexmap` crate, bundled with `FxHasher`.
 type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
+/// `Puppeter` is the core struct for managing actors within the system.
+///
+/// It handles the lifecycle, communication, and resource management of actors.
+/// Moreover, it manages critical errors that can occur in the system.
+///
+/// # Fields
+///
+/// * `message_postmans` - A mapping between a process ID (`Pid`) and its `Postman` for message
+/// passing.
+/// * `service_postmans` - A mapping between a `Pid` and its `ServicePostman` for service requests.
+/// * `statuses` - A mapping between a `Pid` and its `StatusChannels` for monitoring actor status.
+/// * `master_to_puppets` - A mapping between a master actor and its child actors.
+/// * `puppet_to_master` - A mapping from a child actor (puppet) to its master.
+/// * `resources` - Holds shared resources accessible by the actors.
+/// * `executor` - A dedicated `tokio` executor for running actor tasks.
+/// * `failure_tx` - An unbounded sender for reporting critical errors that cannot be handled
+/// internally.
+/// * `failure_rx` - A receiver for critical errors reported by the system.
 #[derive(Clone, Debug)]
 pub struct Puppeter {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
@@ -58,6 +82,23 @@ impl Default for Puppeter {
 
 #[allow(clippy::expect_used)]
 impl Puppeter {
+    /// Constructs a new instance of Puppeter, which acts as a manager for various actors within
+    /// the framework.
+    ///
+    /// This function initializes the internal communication channels, dedicated executor, and
+    /// other necessary components based on the system's available resources (e.g., CPU cores).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// let puppeter = Puppeter::new();
+    /// // Now you can use `puppeter` to manage actors.
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if it fails to determine the number of available CPU cores on the system.
     #[must_use]
     pub fn new() -> Self {
         let (tx, rx) = mpsc::unbounded_channel();
@@ -76,6 +117,32 @@ impl Puppeter {
         }
     }
 
+    /// Sets a callback function to be called in the event of an unrecoverable error.
+    ///
+    /// This method allows setting a user-defined function that will be executed if a critical
+    /// error occurs that cannot be internally handled by Puppet or any Master in the actor
+    /// hierarchy. This function serves as a last resort and is typically used to perform cleanup
+    /// or logging before shutting down the actor or system in a controlled manner.
+    ///
+    /// # Example Usage
+    ///
+    /// ```rust
+    /// # use std::pin::Pin;
+    /// # use pptr::puppeter::Puppeter;
+    ///
+    /// let puppeter = Puppeter::new();
+    /// puppeter.on_unrecoverable_failure(|pptr, error| {
+    ///     Box::pin(async move {
+    ///         println!("Unrecoverable error encountered: {:?}", error);
+    ///         // Application cleanup and termination logic here
+    ///     })
+    /// });
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic by itself, but the user-supplied callback function can panic if
+    /// not properly handled.
     pub async fn on_unrecoverable_failure<F>(&self, f: F)
     where
         F: FnOnce(
@@ -92,11 +159,58 @@ impl Puppeter {
         }
     }
 
+    /// Awaits an unrecoverable error that cannot be handled internally or by any actor in the
+    /// hierarchy.
+    ///
+    /// This function listens for a critical error that is deemed unrecoverable, meaning it cannot
+    /// be gracefully handled by the current puppet or any supervising puppet in its hierarchy.
+    /// This is typically used to perform cleanup or logging before shutting down the actor or
+    /// system in a controlled manner.
+    ///
+    /// # Example Usage
+    ///
+    /// ```rust
+    /// # use std::pin::Pin;
+    /// # use pptr::puppeter::Puppeter;
+    /// # use tokio::time::{timeout, Duration};
+    ///
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    /// let puppeter = Puppeter::new();
+    /// let result = timeout(Duration::from_millis(100), puppeter.wait_for_unrecoverable_failure()).await;
+    ///
+    /// match result {
+    ///     Ok(err) => println!("Unrecoverable error encountered: {:?}", err),
+    ///     Err(_) => println!("No error encountered within 100 milliseconds"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the internal mechanism for receiving critical errors is not initialized or if
+    /// receiving fails.
     pub async fn wait_for_unrecoverable_failure(self) -> CriticalError {
         self.failure_rx.take().unwrap().recv().await.unwrap()
     }
 
-    pub fn register_puppet<M, P>(
+    /// Registers a puppet within the system with all necessary data.
+    ///
+    /// This function is intended for internal use within the framework to associate a puppet with
+    /// its communication and lifecycle channels. It ensures that the puppet is ready to receive
+    /// and process messages, respond to service packets, and report its lifecycle status.
+    ///
+    /// # Panics
+    ///
+    /// This function does not directly panic.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the puppet cannot be registered due to a conflict with an
+    /// existing registration.
+    ///
+    pub(crate) fn register_puppet<M, P>(
         &self,
         postman: Postman<P>,
         service_postman: ServicePostman,
