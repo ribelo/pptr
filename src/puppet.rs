@@ -505,6 +505,14 @@ impl Context {
         self.pptr.ask_with_timeout::<P, E>(message, duration).await
     }
 
+    pub fn cast<P, E>(&self, message: E)
+    where
+        P: Handler<E>,
+        E: Message,
+    {
+        self.pptr.cast::<P, E>(message);
+    }
+
     pub async fn send_command<P>(
         &self,
         command: ServiceCommand,

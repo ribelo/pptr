@@ -568,6 +568,17 @@ impl Puppeter {
             .await?)
     }
 
+    pub fn cast<P, E>(&self, message: E)
+    where
+        P: Handler<E>,
+        E: Message,
+    {
+        let cloned_self = self.clone();
+        tokio::spawn(async move {
+            _ = cloned_self.send::<P, E>(message).await;
+        });
+    }
+
     pub(crate) async fn send_command_by_pid(
         &self,
         master: Pid,
