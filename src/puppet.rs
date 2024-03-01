@@ -23,7 +23,9 @@ use crate::{
 pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     type Supervision: SupervisionStrategy + Send + Sync;
 
-    async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError>;
+    async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
+        Ok(self.clone())
+    }
 
     async fn on_init(&mut self, ctx: &Context) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Initializing puppet");
