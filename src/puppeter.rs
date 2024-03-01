@@ -195,21 +195,7 @@ impl Puppeter {
         self.failure_rx.take().unwrap().recv().await.unwrap()
     }
 
-    /// Registers a puppet within the system with all necessary data.
-    ///
-    /// This function is intended for internal use within the framework to associate a puppet with
-    /// its communication and lifecycle channels. It ensures that the puppet is ready to receive
-    /// and process messages, respond to service packets, and report its lifecycle status.
-    ///
-    /// # Panics
-    ///
-    /// This function does not directly panic.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `PuppetError` if the puppet cannot be registered due to a conflict with an
-    /// existing registration.
-    ///
+    /// Proxy for `register_puppet_by_pid`.
     pub(crate) fn register_puppet<M, P>(
         &self,
         postman: Postman<P>,
@@ -226,6 +212,20 @@ impl Puppeter {
         self.register_puppet_by_pid(master, postman, service_postman, status_tx, status_rx)
     }
 
+    /// Registers a puppet within the system with all necessary data.
+    ///
+    /// This function is intended for internal use within the framework to associate a puppet with
+    /// its communication and lifecycle channels. It ensures that the puppet is ready to receive
+    /// and process messages, respond to service packets, and report its lifecycle status.
+    ///
+    /// # Panics
+    ///
+    /// This function can panic if it fails to acquire a lock on the internal mutex.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the puppet cannot be registered due to a conflict with an
+    /// existing registration.
     pub(crate) fn register_puppet_by_pid<P>(
         &self,
         master: Pid,
@@ -286,6 +286,16 @@ impl Puppeter {
         Ok(())
     }
 
+    /// Checks if a puppet of the specific type is registered and exists.
+    ///
+    /// This function inspects the internal registry to determine if a puppet,
+    /// identified by its PID (`puppet`), is present. It is a convenience method
+    /// for quickly verifying the existence of a puppet without needing to retrieve
+    /// its entire data structure.
+    ///
+    /// # Panics
+    ///
+    /// This function can panic if it fails to acquire a lock on the internal mutex.
     #[must_use]
     pub fn is_puppet_exists<P>(&self) -> bool
     where
@@ -295,10 +305,18 @@ impl Puppeter {
         self.is_puppet_exists_by_pid(puppet)
     }
 
+    /// Intenal function to check if a puppet exists by its PID.
     pub(crate) fn is_puppet_exists_by_pid(&self, puppet: Pid) -> bool {
         self.get_puppet_master_by_pid(puppet).is_some()
     }
 
+    /// Retrieves a `Postman` instance for the specified Puppet type `P`.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if it fails to acquire the mutex lock on the internal
+    /// storage of `Postman` instances. This is a critical error indicating that
+    /// the locking mechanism preventing data races is compromised.
     #[must_use]
     pub fn get_postman<P>(&self) -> Option<Postman<P>>
     where
