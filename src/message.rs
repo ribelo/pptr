@@ -196,7 +196,7 @@ where
         Self { tx }
     }
 
-    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
+    pub(crate) async fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
         P: Handler<E>,
         E: Message + 'static,
@@ -210,7 +210,7 @@ where
         Ok(())
     }
 
-    pub async fn send_and_await_response<E>(
+    pub(crate) async fn send_and_await_response<E>(
         &self,
         message: E,
         duration: Option<std::time::Duration>,
@@ -271,7 +271,11 @@ impl ServicePostman {
         Self { tx }
     }
 
-    pub async fn send(&self, puppet: Pid, command: ServiceCommand) -> Result<(), PostmanError> {
+    pub(crate) async fn send(
+        &self,
+        puppet: Pid,
+        command: ServiceCommand,
+    ) -> Result<(), PostmanError> {
         let packet = ServicePacket::without_reply(command);
         self.tx
             .send(packet)
@@ -279,7 +283,7 @@ impl ServicePostman {
             .map_err(|_e| PostmanError::SendError { puppet })
     }
 
-    pub async fn send_and_await_response(
+    pub(crate) async fn send_and_await_response(
         &self,
         puppet: Pid,
         command: ServiceCommand,

@@ -255,11 +255,7 @@ pub enum PostmanError {
     #[error("Can't send message. Channel closed.")]
     SendError { puppet: Pid },
     #[error("Can't receive message. Channel closed.")]
-    ReceiveError { puppet: Pid },
-    #[error("Can't receive response. Channel closed.")]
     ResponseReceiveError { puppet: Pid },
-    #[error("Can't reveive response. Response timeout.")]
-    ResponseTimeout { puppet: Pid },
     #[error(transparent)]
     PuppetError(#[from] PuppetError),
 }
@@ -267,10 +263,9 @@ pub enum PostmanError {
 impl From<PostmanError> for PuppetError {
     fn from(err: PostmanError) -> Self {
         match err {
-            PostmanError::ResponseTimeout { puppet }
-            | PostmanError::ReceiveError { puppet }
-            | PostmanError::SendError { puppet }
-            | PostmanError::ResponseReceiveError { puppet } => Self::critical(puppet, &err),
+            PostmanError::SendError { puppet } | PostmanError::ResponseReceiveError { puppet } => {
+                Self::critical(puppet, &err)
+            }
             PostmanError::PuppetError(err) => err,
         }
     }
