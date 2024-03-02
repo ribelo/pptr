@@ -3,7 +3,7 @@ use std::fmt;
 use thiserror::Error;
 
 use crate::{
-    pid::Pid,
+    pid::{Id, Pid},
     puppet::{Lifecycle, LifecycleStatus},
 };
 
@@ -35,7 +35,9 @@ impl From<PuppetDoesNotExistError> for PuppetError {
 
 #[derive(Debug, Error)]
 #[error("Resource already exist")]
-pub struct ResourceAlreadyExist;
+pub struct ResourceAlreadyExist {
+    pub(crate) id: Id,
+}
 
 #[derive(Debug, Error)]
 #[error("Puppet already exist: {puppet}")]

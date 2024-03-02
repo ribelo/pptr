@@ -729,7 +729,7 @@ impl Puppeter {
             e.insert(Arc::new(Mutex::new(Box::new(resource))));
             Ok(())
         } else {
-            Err(ResourceAlreadyExist)
+            Err(ResourceAlreadyExist { id })
         }
     }
 
