@@ -162,17 +162,13 @@ impl SupervisionStrategy for strategy::RestForOne {
         master: Pid,
         puppet: Pid,
     ) -> Result<(), PuppetError> {
-        let mut restart_next = false;
         if let Some(puppets) = post_office.get_puppets_by_pid(master) {
+            let mut restart_next = false;
             for pid in puppets.into_iter().rev() {
-                if restart_next {
-                    post_office
-                        .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
-                        .await?;
-                }
-
                 if pid == puppet {
                     restart_next = true;
+                }
+                if restart_next {
                     post_office
                         .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
                         .await?;
