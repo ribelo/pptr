@@ -92,7 +92,7 @@ impl Puppeter {
     ///
     /// ```
     /// # use pptr::puppeter::Puppeter;
-    /// let puppeter = Puppeter::new();
+    /// let pptr = Puppeter::new();
     /// // Now you can use `puppeter` to manage actors.
     /// ```
     ///
@@ -130,8 +130,8 @@ impl Puppeter {
     /// # use std::pin::Pin;
     /// # use pptr::puppeter::Puppeter;
     ///
-    /// let puppeter = Puppeter::new();
-    /// puppeter.on_unrecoverable_failure(|pptr, error| {
+    /// # let pptr = Puppeter::new();
+    /// pptr.on_unrecoverable_failure(|pptr, error| {
     ///     Box::pin(async move {
     ///         println!("Unrecoverable error encountered: {:?}", error);
     ///         // Application cleanup and termination logic here
@@ -176,8 +176,8 @@ impl Puppeter {
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let puppeter = Puppeter::new();
-    /// let result = timeout(Duration::from_millis(100), puppeter.wait_for_unrecoverable_failure()).await;
+    /// let pptr = Puppeter::new();
+    /// let result = timeout(Duration::from_millis(100), pptr.wait_for_unrecoverable_failure()).await;
     ///
     /// match result {
     ///     Ok(err) => println!("Unrecoverable error encountered: {:?}", err),
@@ -318,7 +318,7 @@ impl Puppeter {
     /// storage of `Postman` instances. This is a critical error indicating that
     /// the locking mechanism preventing data races is compromised.
     #[must_use]
-    pub fn get_postman<P>(&self) -> Option<Postman<P>>
+    pub(crate) fn get_postman<P>(&self) -> Option<Postman<P>>
     where
         P: Lifecycle,
     {
@@ -331,6 +331,16 @@ impl Puppeter {
             .cloned()
     }
 
+    /// Retrieves the `ServicePostman` instance associated with the given puppet `Pid`.
+    ///
+    /// This function looks up the `ServicePostman` instance in the internal storage using the
+    /// provided `puppet` identifier. If a matching instance is found, it is cloned and returned
+    /// wrapped in an `Option`. If no instance is found for the given `Pid`, `None` is returned.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it fails to acquire the mutex lock on the internal storage of
+    /// `ServicePostman` instances, indicating a critical error in the locking mechanism.
     pub(crate) fn get_service_postman_by_pid(&self, puppet: Pid) -> Option<ServicePostman> {
         self.service_postmans
             .lock()
@@ -339,6 +349,18 @@ impl Puppeter {
             .cloned()
     }
 
+    /// Updates the status of the puppet identified by `puppet` to the given `status`.
+    ///
+    /// This function retrieves the status entry associated with the `puppet` identifier
+    /// from the internal status storage. If an entry is found, it sends the new `status`
+    /// value to the associated channel, triggering a status update notification.
+    ///
+    /// The status is only updated if the new `status` differs from the current value.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it fails to acquire the mutex lock on the internal
+    /// status storage, indicating a critical error in the locking mechanism.
     pub(crate) fn set_status_by_pid(&self, puppet: Pid, status: LifecycleStatus) {
         self.statuses
             .lock()
@@ -356,6 +378,27 @@ impl Puppeter {
             });
     }
 
+    /// Subscribes to the status updates of the puppet associated with the type `P`.
+    ///
+    /// Returns a `watch::Receiver` that can be used to receive status updates for the puppet.
+    /// If no status entry is found for the given puppet type, `None` is returned.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use pptr::prelude::*;
+    /// # #[derive(Clone)]
+    /// # struct MyPuppet;
+    /// # impl Lifecycle for MyPuppet {
+    /// #     type Supervision = OneForAll;
+    /// # }
+    /// let pptr = Puppeter::new();
+    /// if let Some(receiver) = pptr.subscribe_puppet_status::<MyPuppet>() {
+    ///     // Use the receiver to get status updates for MyPuppet
+    ///     let status = receiver.borrow();
+    ///     println!("Current status: {:?}", status);
+    /// }
+    /// ```
     #[must_use]
     pub fn subscribe_puppet_status<P>(&self) -> Option<watch::Receiver<LifecycleStatus>>
     where
@@ -365,6 +408,15 @@ impl Puppeter {
         self.subscribe_puppet_status_by_pid(puppet)
     }
 
+    /// Subscribes to the status updates of the puppet identified by `puppet`.
+    ///
+    /// Returns a cloned `watch::Receiver` that can be used to receive status updates for the puppet.
+    /// If no status entry is found for the given `puppet` identifier, `None` is returned.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it fails to acquire the mutex lock on the internal status storage,
+    /// indicating a critical error in the locking mechanism.
     pub(crate) fn subscribe_puppet_status_by_pid(
         &self,
         puppet: Pid,
@@ -376,6 +428,25 @@ impl Puppeter {
             .map(|(_, rx)| rx.clone())
     }
 
+    /// Retrieves the current status of the puppet associated with the type `P`.
+    ///
+    /// Returns the current `LifecycleStatus` of the puppet wrapped in an `Option`.
+    /// If no status entry is found for the given puppet type, `None` is returned.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use pptr::prelude::*;
+    /// # #[derive(Clone)]
+    /// # struct MyPuppet;
+    /// # impl Lifecycle for MyPuppet {
+    /// #     type Supervision = OneForAll;
+    /// # }
+    /// # let pptr = Puppeter::new();
+    /// if let Some(status) = pptr.get_puppet_status::<MyPuppet>() {
+    ///     println!("Current status: {:?}", status);
+    /// }
+    /// ```
     #[must_use]
     pub fn get_puppet_status<P>(&self) -> Option<LifecycleStatus>
     where
@@ -385,6 +456,15 @@ impl Puppeter {
         self.get_puppet_status_by_pid(puppet)
     }
 
+    /// Retrieves the current status of the puppet identified by `puppet`.
+    ///
+    /// Returns the current `LifecycleStatus` of the puppet wrapped in an `Option`.
+    /// If no status entry is found for the given `puppet` identifier, `None` is returned.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it fails to acquire the mutex lock on the internal status storage,
+    /// indicating a critical error in the locking mechanism.
     pub(crate) fn get_puppet_status_by_pid(&self, puppet: Pid) -> Option<LifecycleStatus> {
         self.statuses
             .lock()
@@ -393,6 +473,15 @@ impl Puppeter {
             .map(|(_, rx)| *rx.borrow())
     }
 
+    /// Checks if the puppet identified by `puppet` is associated with the master identified by `master`.
+    ///
+    /// Returns `Some(true)` if the `puppet` is associated with the `master`, `Some(false)` if not,
+    /// and `None` if no entry is found for the given `master` identifier.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it fails to acquire the mutex lock on the internal `master_to_puppets`
+    /// storage, indicating a critical error in the locking mechanism.
     pub(crate) fn puppet_has_puppet_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
         self.master_to_puppets
             .lock()
@@ -401,10 +490,26 @@ impl Puppeter {
             .map(|puppets| puppets.contains(&puppet))
     }
 
+    /// Checks if the puppet identified by `puppet` has permission from the master identified by `master`.
+    ///
+    /// Returns `Some(true)` if the `puppet` has permission from the `master`, `Some(false)` if not,
+    /// and `None` if no entry is found for the given `master` identifier.
+    ///
+    /// # Panics
+    ///
+    /// This function is a wrapper around `puppet_has_puppet_by_pid`, so the same panic conditions apply.
     pub(crate) fn puppet_has_permission_by_pid(&self, master: Pid, puppet: Pid) -> Option<bool> {
         self.puppet_has_puppet_by_pid(master, puppet)
     }
 
+    /// Retrieves the master identifier associated with the given `puppet` identifier.
+    ///
+    /// Returns `Some(Pid)` if a master is found for the `puppet`, or `None` if no association exists.
+    ///
+    /// # Panics
+    ///
+    /// This function may panic if it fails to acquire the mutex lock on the internal `puppet_to_master`
+    /// storage, indicating a critical error in the locking mechanism.
     pub(crate) fn get_puppet_master_by_pid(&self, puppet: Pid) -> Option<Pid> {
         self.puppet_to_master
             .lock()
@@ -413,6 +518,15 @@ impl Puppeter {
             .copied()
     }
 
+    /// Sets the master for a given puppet.
+    ///
+    /// This method allows changing the master of a puppet, transferring control
+    /// from the old master to a new master. The old master must have permission
+    /// over the puppet, otherwise an error is returned.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub fn set_puppet_master<O, M, P>(&self) -> Result<(), PuppetOperationError>
     where
         O: Lifecycle,
@@ -425,6 +539,15 @@ impl Puppeter {
         self.set_puppet_master_by_pid(old_master, new_master, puppet)
     }
 
+    /// Sets the master for a puppet using their Pids.
+    ///
+    /// This is the internal implementation of `set_puppet_master` that operates
+    /// directly on Pids. It transfers a puppet from its old master to a new master,
+    /// checking permissions and updating the internal mappings.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) fn set_puppet_master_by_pid(
         &self,
         old_master: Pid,
@@ -465,6 +588,15 @@ impl Puppeter {
         }
     }
 
+    /// Retrieves the set of puppets controlled by a given master.
+    ///
+    /// This method returns an optional `FxIndexSet` containing the `Pid`s of all puppets
+    /// currently under the control of the specified master. If the master has no puppets,
+    /// or if the master does not exist, `None` is returned.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) fn get_puppets_by_pid(&self, master: Pid) -> Option<FxIndexSet<Pid>> {
         self.master_to_puppets
             .lock()
@@ -473,6 +605,21 @@ impl Puppeter {
             .cloned()
     }
 
+    /// Detaches a puppet from its current master, making it its own master.
+    ///
+    /// This method allows a master to relinquish control over a puppet, effectively
+    /// making the puppet independent. The master must have permission over the puppet,
+    /// otherwise an error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetOperationError` if:
+    /// - The specified puppet does not exist.
+    /// - The master does not have permission to detach the puppet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) fn detach_puppet_by_pid(
         &self,
         master: Pid,
@@ -492,6 +639,21 @@ impl Puppeter {
         }
     }
 
+    /// Deletes a puppet, removing it from the control of its master.
+    ///
+    /// This method allows a master to completely remove a puppet from the system,
+    /// deleting all associated data. The master must have permission over the puppet,
+    /// otherwise an error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetOperationError` if:
+    /// - The specified puppet does not exist.
+    /// - The master does not have permission to delete the puppet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub fn delete_puppet<O, P>(&self) -> Result<(), PuppetOperationError>
     where
         O: Lifecycle,
@@ -502,6 +664,21 @@ impl Puppeter {
         self.delete_puppet_by_pid(master, puppet)
     }
 
+    /// Deletes a puppet by its `Pid`, removing it from the control of its master.
+    ///
+    /// This is the internal implementation of `delete_puppet` that operates directly
+    /// on `Pid`s. It removes a puppet from the system, deleting all associated data.
+    /// The master must have permission over the puppet, otherwise an error is returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetOperationError` if:
+    /// - The specified puppet does not exist.
+    /// - The master does not have permission to delete the puppet.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) fn delete_puppet_by_pid(
         &self,
         master: Pid,
@@ -547,6 +724,26 @@ impl Puppeter {
         }
     }
 
+    /// Sends a message of type `E` to the puppet handler of type `P`.
+    ///
+    /// This method sends a message to the puppet's message handler of the specified type.
+    /// It returns a `Result` indicating the success or failure of the send operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendMessageError` if:
+    /// - The puppet does not exist.
+    /// - The message fails to send.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let result = pptr.send::<Puppet, _>(Message::new()).await;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub async fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
     where
         P: Handler<E>,
@@ -558,6 +755,27 @@ impl Puppeter {
         Ok(address.send::<E>(message).await?)
     }
 
+    /// Sends a message of type `E` to the puppet handler of type `P` and awaits a response.
+    ///
+    /// This method sends a message to the puppet's message handler of the specified type
+    /// and awaits a response. It returns a `Result` containing the response or an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendMessageError` if:
+    /// - The puppet does not exist.
+    /// - The message fails to send or receive a response.
+    /// - Handler return error.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let response = pptr.ask::<Puppet, _>(MyMessage::new()).await?;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub async fn ask<P, E>(&self, message: E) -> Result<ResponseFor<P, E>, PuppetSendMessageError>
     where
         P: Handler<E>,
@@ -569,6 +787,28 @@ impl Puppeter {
         Ok(address.send_and_await_response::<E>(message, None).await?)
     }
 
+    /// Sends a message of type `E` to the puppet handler of type `P` with a timeout and awaits a response.
+    ///
+    /// This method sends a message to the puppet's message handler of the specified type
+    /// and awaits a response, with a specified timeout duration. It returns a `Result`
+    /// containing the response or an error.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendMessageError` if:
+    /// - The puppet does not exist.
+    /// - The message fails to send or receive a response within the timeout duration.
+    /// - Handler return error.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let response = pptr.ask_with_timeout::<Puppet, _>(MyMessage::new(), Duration::from_secs(5)).await?;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) async fn ask_with_timeout<P, E>(
         &self,
         message: E,
@@ -586,6 +826,17 @@ impl Puppeter {
             .await?)
     }
 
+    /// Sends a message of type `E` to the puppet handler of type `P` without awaiting a response.
+    ///
+    /// This method sends a message to the puppet's message handler of the specified type
+    /// asynchronously, without awaiting a response. It spawns a new async task to handle
+    /// the send operation.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// pptr.cast::<Puppet, _>(MyMessage::new());
+    /// ```
     pub fn cast<P, E>(&self, message: E)
     where
         P: Handler<E>,
@@ -597,6 +848,28 @@ impl Puppeter {
         });
     }
 
+    /// Sends a command to a puppet by its `Pid`, with the master's permission.
+    ///
+    /// This method sends a `ServiceCommand` to a puppet identified by its `Pid`, ensuring
+    /// that the master has permission over the puppet. It returns a `Result` indicating
+    /// the success or failure of the send operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendCommandError` if:
+    /// - The specified puppet does not exist.
+    /// - The master does not have permission to send commands to the puppet.
+    /// - The command fails to send or receive a response.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let result = pptr.send_command_by_pid(master_pid, puppet_pid, ServiceCommand::Start).await;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) async fn send_command_by_pid(
         &self,
         master: Pid,
@@ -621,6 +894,26 @@ impl Puppeter {
         }
     }
 
+    /// Spawns a new puppet and links it to the specified master.
+    ///
+    /// This method creates a new puppet using the provided `PuppetBuilder` and links it to
+    /// the specified master `Pid`. It returns an `Address<P>` for the newly spawned puppet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if:
+    /// - The specified master does not exist and is not the same as the puppet's `Pid`.
+    /// - The puppet fails to spawn or initialize.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let address = pptr.spawn::<Master, Puppet>(builder).await?;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     #[allow(clippy::impl_trait_in_params)]
     pub async fn spawn<M, P>(
         &self,
@@ -634,8 +927,28 @@ impl Puppeter {
         self.spawn_puppet_by_pid(master, builder).await
     }
 
+    /// Spawns a new independent puppet and links it to itself.
+    ///
+    /// This method creates a new puppet using the provided `PuppetBuilder` and links it to
+    /// itself, making it an independent puppet. It returns an `Address<P>` for the newly
+    /// spawned puppet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if:
+    /// - The puppet fails to spawn or initialize.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let address = pptr.spawn_owned::<Puppet>(builder).await?;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     #[allow(clippy::impl_trait_in_params)]
-    pub async fn spawn_self<P>(
+    pub async fn spawn_owned<P>(
         &self,
         builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
@@ -646,6 +959,26 @@ impl Puppeter {
         self.spawn_puppet_by_pid(master, builder).await
     }
 
+    /// Spawns a new puppet and links it to the specified master `Pid`.
+    ///
+    /// This method creates a new puppet using the provided `PuppetBuilder` and links it to
+    /// the specified master `Pid`. It returns an `Address<P>` for the newly spawned puppet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if:
+    /// - The specified master does not exist and is not the same as the puppet's `Pid`.
+    /// - The puppet fails to spawn or initialize.
+    ///
+    /// # Example Usage
+    ///
+    /// ```ignore
+    /// let address = pptr.spawn_puppet_by_pid::<Puppet>(master_pid, builder).await?;
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) async fn spawn_puppet_by_pid<P>(
         &self,
         master_pid: Pid,
@@ -715,6 +1048,27 @@ impl Puppeter {
         Ok(address)
     }
 
+    /// Adds a new resource to the resource collection.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime. If a
+    /// resource with the same type already exists, an error will be returned.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// pptr.add_resource::<i32>(10).unwrap();
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the internal mutex lock fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ResourceAlreadyExist` error if a resource of the same type already exists in the
+    /// collection.
     pub fn add_resource<T>(&self, resource: T) -> Result<(), ResourceAlreadyExist>
     where
         T: Send + Sync + Clone + 'static,
@@ -733,6 +1087,27 @@ impl Puppeter {
         }
     }
 
+    /// Returns a cloned copy of the resource of type `T`, if it exists.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// # pptr.add_resource::<i32>(10).unwrap();
+    /// let value = pptr.get_resource::<i32>().unwrap();
+    /// assert_eq!(value, 10);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the internal mutex lock fails.
+    ///
+    /// # Returns
+    ///
+    /// `Some(T)` if the resource exists, otherwise `None`.
     #[must_use]
     pub fn get_resource<T>(&self) -> Option<T>
     where
@@ -751,6 +1126,31 @@ impl Puppeter {
         Some(any_ref.clone())
     }
 
+    /// Borrows the resource of type `T` and passes it to the provided closure `f`.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// # pptr.add_resource::<i32>(10).unwrap();
+    /// let result = pptr.with_resource::<i32, _, _>(|value| {
+    ///     assert_eq!(*value, 10);
+    ///     "success"
+    /// }).unwrap();
+    /// assert_eq!(result, "success");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the internal mutex lock fails.
+    ///
+    /// # Returns
+    ///
+    /// `Some(R)` if the resource exists, where `R` is the return type of the closure `f`.
+    /// Returns `None` if the resource doesn't exist.
     pub fn with_resource<T, F, R>(&self, f: F) -> Option<R>
     where
         T: Send + Sync + Clone + 'static,
@@ -769,6 +1169,32 @@ impl Puppeter {
         Some(f(any_ref))
     }
 
+    /// Mutably borrows the resource of type `T` and passes it to the provided closure `f`.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// # pptr.add_resource::<i32>(10).unwrap();
+    /// let result = pptr.with_resource_mut::<i32, _, _>(|value| {
+    ///     *value += 1;
+    ///     "success"
+    /// }).unwrap();
+    /// assert_eq!(result, "success");
+    /// assert_eq!(pptr.expect_resource::<i32>(), 11);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the internal mutex lock fails.
+    ///
+    /// # Returns
+    ///
+    /// `Some(R)` if the resource exists, where `R` is the return type of the closure `f`.
+    /// Returns `None` if the resource doesn't exist.
     pub fn with_resource_mut<T, F, R>(&self, f: F) -> Option<R>
     where
         T: Send + Sync + Clone + 'static,
@@ -787,6 +1213,23 @@ impl Puppeter {
         Some(f(any_mut))
     }
 
+    /// Returns a cloned copy of the resource of type `T`, or panics if it doesn't exist.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// # pptr.add_resource::<i32>(10).unwrap();
+    /// let value = pptr.expect_resource::<i32>();
+    /// assert_eq!(value, 10);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if the internal mutex lock fails or if the resource doesn't exist.
     #[must_use]
     pub fn expect_resource<T>(&self) -> T
     where
@@ -796,6 +1239,22 @@ impl Puppeter {
     }
 }
 
+/// Runs the main event loop for a puppet, handling lifecycle status changes, commands, and messages.
+///
+/// The loop continues running until one of the following conditions is met:
+/// - The puppet's status changes to `Inactive` or `Failed`.
+/// - The `puppet_status` channel is closed.
+/// - The `command_rx` channel is closed.
+/// - The `message_rx` channel is closed.
+///
+/// If the puppet's status is `Active`, incoming commands and messages are handled by the puppet.
+/// Otherwise, commands are ignored and an error response is sent, while messages are met with an
+/// error reply indicating the puppet's status.
+///
+/// # Panics
+///
+/// This function does not explicitly panic, but may propagate panics from the `handle_command` or
+/// `handle_message` methods of the `Puppet` and `Puppeter` structs.
 pub(crate) async fn run_puppet_loop<P>(
     mut puppet: P,
     mut puppeter: Context,
@@ -1333,7 +1792,7 @@ mod tests {
     async fn test_failed_recovery_after_failure() {
         let pptr = Puppeter::new();
         let res = pptr
-            .spawn_self::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
+            .spawn_owned::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
             .await;
         res.unwrap();
 
@@ -1344,14 +1803,5 @@ mod tests {
             }
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
-    }
-
-    #[tokio::test]
-    async fn test_add_resouce() {
-        let pptr = Puppeter::new();
-        pptr.add_resource::<i32>(10).unwrap();
-        pptr.with_resource::<i32, _, _>(|res| {
-            assert_eq!(*res, 10);
-        });
     }
 }
