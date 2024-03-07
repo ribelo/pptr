@@ -82,40 +82,25 @@ impl RetryConfigBuilder {
     }
 }
 
-impl Default for RetryConfig {
-    fn default() -> Self {
-        let inner = RetryConfigInner {
-            max_retries: None,
-            within_duration: None,
-            with_time_between: None,
-            current_retry_count: 0,
-            last_retry: Instant::now(),
-        };
-        Self {
-            inner: Arc::new(Mutex::new(inner)),
-        }
-    }
-}
-
 impl RetryConfig {
     fn reset_count(&self) {
-        self.inner.lock().unwrap().current_retry_count = 0;
-        self.inner.lock().unwrap().last_retry = Instant::now();
+        let mut inner = self.inner.lock().unwrap();
+        inner.current_retry_count = 0;
+        inner.last_retry = Instant::now();
     }
 
     pub fn increment_retry(&self) -> Result<(), RetryError> {
-        let elapsed = self.inner.lock().unwrap().last_retry.elapsed();
+        let mut inner = self.inner.lock().unwrap();
 
-        if let Some(duration) = self.inner.lock().unwrap().within_duration {
-            if elapsed > duration {
-                self.reset_count();
+        if let Some(duration) = inner.within_duration {
+            if inner.last_retry.elapsed() > duration {
+                inner.current_retry_count = 0;
             }
         }
 
-        if self.inner.lock().unwrap().current_retry_count
-            < self.inner.lock().unwrap().max_retries.unwrap_or(0)
-        {
-            self.inner.lock().unwrap().current_retry_count += 1;
+        if inner.current_retry_count < inner.max_retries.unwrap_or(0) {
+            inner.current_retry_count += 1;
+            inner.last_retry = Instant::now();
             Ok(())
         } else {
             Err(RetryError::new("Max retry reached"))

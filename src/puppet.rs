@@ -15,7 +15,7 @@ use crate::{
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
     puppeter::Puppeter,
-    supervision::{RetryConfig, SupervisionStrategy},
+    supervision::{RetryConfig, RetryConfigBuilder, SupervisionStrategy},
 };
 
 #[allow(unused_variables)]
@@ -85,7 +85,7 @@ where
             messages_buffer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
             // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
             commands_buffer_size: unsafe { NonZeroUsize::new_unchecked(16) },
-            retry_config: Some(RetryConfig::default()),
+            retry_config: Some(RetryConfigBuilder::default().build()),
         }
     }
 
