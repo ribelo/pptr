@@ -8,10 +8,23 @@ use rustc_hash::FxHasher;
 
 use crate::puppet::Lifecycle;
 
+/// A unique hashable ID used to identify puppets and resources.
+///
+/// `Id` is an opaque type that wraps a `u64` value. It provides a way to
+/// uniquely identify and compare different entities in the system.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub struct Id(u64);
 
 impl Id {
+    /// Creates a new `Id` instance for the given type `T`.
+    ///
+    /// This function generates a unique `Id` based on the `TypeId` of `T`. It
+    /// uses the `FxHasher` to hash the `TypeId` and create a deterministic `u64`
+    /// value.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
     #[must_use]
     pub fn new<T>() -> Self
     where
@@ -23,6 +36,14 @@ impl Id {
         Self(hasher.finish())
     }
 
+    /// Converts the `Id` to a `Pid` for the given puppet type `P`.
+    ///
+    /// This function creates a new `Pid` instance using the current `Id` value
+    /// and the `Lifecycle` implementation of the puppet type `P`.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
     #[must_use]
     pub fn to_pid<P>(&self) -> Pid
     where
@@ -44,6 +65,10 @@ impl std::hash::Hash for Id {
     }
 }
 
+/// A unique hashable ID used to identify puppets.
+///
+/// `Pid` is similar to `Id` but includes an additional `name_fn` field that
+/// provides a way to retrieve the name of the puppet type statically.
 #[derive(Clone, Copy, Eq)]
 pub struct Pid {
     pub(crate) id: Id,
@@ -70,6 +95,14 @@ impl Ord for Pid {
 
 impl Pid {
     #[must_use]
+    /// Creates a new `Pid` instance for the given puppet type `P`.
+    ///
+    /// This function generates a unique `Pid` based on the `Id` of the puppet
+    /// type `P` and assigns the `_name` function as the `name_fn` field.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
     pub fn new<P>() -> Self
     where
         P: Lifecycle,
@@ -81,6 +114,13 @@ impl Pid {
         }
     }
 
+    /// Converts the `Pid` to its corresponding `Id`.
+    ///
+    /// This function returns the `Id` value stored within the `Pid` instance.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
     #[must_use]
     pub fn to_id(&self) -> Id {
         self.id
@@ -93,6 +133,14 @@ impl Pid {
         std::any::type_name::<T>().to_owned()
     }
 
+    /// Retrieves the name of the type `T`.
+    ///
+    /// This function uses `std::any::type_name` to get the name of the type `T`
+    /// and returns it as an owned `String`.
+    ///
+    /// # Panics
+    ///
+    /// This function does not panic.
     #[must_use]
     pub fn name(&self) -> String {
         (self.name_fn)()
