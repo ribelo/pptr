@@ -1717,7 +1717,7 @@ mod tests {
     async fn self_mutate_puppet() {
         #[derive(Debug, Clone, Default)]
         pub struct CounterPuppet {
-            counter: Vec<i32>,
+            counter: i32,
         }
 
         #[async_trait]
@@ -1733,21 +1733,21 @@ mod tests {
 
         #[async_trait]
         impl Handler<IncrementCounter> for CounterPuppet {
-            type Response = ();
+            type Response = i32;
             type Executor = SequentialExecutor;
             async fn handle_message(
                 &mut self,
                 _msg: IncrementCounter,
                 puppeter: &Context,
             ) -> Result<Self::Response, PuppetError> {
-                println!("Counter: {}", self.counter.len());
-                if self.counter.len() < 10 {
-                    self.counter.push(1);
+                println!("Counter: {}", self.counter);
+                if self.counter < 10 {
+                    self.counter += 1;
                     puppeter.send::<Self, _>(IncrementCounter).await?;
                 } else {
                     puppeter.send::<Self, _>(DebugCounterPuppet).await?;
                 }
-                Ok(())
+                Ok(self.counter)
             }
         }
 
@@ -1756,15 +1756,14 @@ mod tests {
 
         #[async_trait]
         impl Handler<DebugCounterPuppet> for CounterPuppet {
-            type Response = ();
+            type Response = i32;
             type Executor = SequentialExecutor;
             async fn handle_message(
                 &mut self,
                 _msg: DebugCounterPuppet,
                 _puppeter: &Context,
             ) -> Result<Self::Response, PuppetError> {
-                println!("Counter: {:?}", self.counter);
-                Ok(())
+                Ok(self.counter)
             }
         }
 
@@ -1776,6 +1775,8 @@ mod tests {
         address.send(IncrementCounter).await.unwrap();
         // wait 1 second for the puppet to finish
         tokio::time::sleep(Duration::from_secs(1)).await;
+        let x = address.ask(DebugCounterPuppet).await.unwrap();
+        assert_eq!(x, 10);
     }
 
     #[tokio::test]
@@ -1785,13 +1786,16 @@ mod tests {
             .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
             .await;
         res.unwrap();
+        let mut success = false;
 
         loop {
             let res = pptr.ask::<PuppetActor, _>(PuppetFailingMessage).await;
             if res.is_ok() {
+                success = true;
                 break;
             }
         }
+        assert!(success);
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     #[tokio::test]
@@ -1801,13 +1805,16 @@ mod tests {
             .spawn_owned::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
             .await;
         res.unwrap();
+        let mut success = false;
 
         loop {
             let res = pptr.ask::<MasterActor, _>(MasterFailingMessage).await;
             if res.is_err() {
+                success = true;
                 break;
             }
         }
+        assert!(success);
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
