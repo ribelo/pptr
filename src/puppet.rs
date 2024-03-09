@@ -80,9 +80,19 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     }
 }
 
+/// A marker trait indicating that a type can be used as a puppet (actor).
+///
+/// Types implementing this trait must be `Send`, `Sync`, `Clone`, and `'static`.
 pub trait Puppet: Send + Sync + Clone + 'static {}
+/// Blanket implementation of the `Puppet` trait for types satisfying the necessary bounds.
+///
+/// This implementation automatically implements the `Puppet` trait for any type that is
+/// `Send`, `Sync`, `Clone`, and `'static`.
 impl<T> Puppet for T where T: Send + Sync + Clone + 'static {}
 
+/// Represents the lifecycle status of a puppet.
+///
+/// The `LifecycleStatus` enum defines the possible states a puppet can be in during its lifecycle.
 #[derive(Debug, Clone, Copy, strum::Display, PartialEq, Eq)]
 pub enum LifecycleStatus {
     Activating,
@@ -93,6 +103,10 @@ pub enum LifecycleStatus {
     Failed,
 }
 
+/// Represents the context of a puppet.
+///
+/// The `Context` struct contains information about a puppet's context, including its process ID (`pid`),
+/// the `Puppeter` instance, and the retry configuration.
 #[derive(Clone, Debug)]
 pub struct Context {
     pub pid: Pid,
@@ -100,6 +114,11 @@ pub struct Context {
     pub(crate) retry_config: RetryConfig,
 }
 
+/// A builder for creating and configuring a puppet.
+///
+/// The `PuppetBuilder` struct allows for the creation and configuration of a puppet instance.
+/// It provides methods to set various options such as the message buffer size, command buffer size,
+/// and retry configuration.
 pub struct PuppetBuilder<P>
 where
     P: Lifecycle,
@@ -115,6 +134,10 @@ impl<P> PuppetBuilder<P>
 where
     P: Lifecycle,
 {
+    /// Creates a new `PuppetBuilder` with the provided puppet state.
+    ///
+    /// This method initializes a new `PuppetBuilder` instance with default values for the
+    /// message buffer size, command buffer size, and retry configuration.
     pub fn new(state: P) -> Self {
         Self {
             pid: Pid::new::<P>(),
@@ -127,18 +150,33 @@ where
         }
     }
 
+    /// Sets the message buffer size for the puppet.
+    ///
+    /// This method allows configuring the size of the message buffer used by the puppet.
+    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
+    /// the updated `PuppetBuilder` instance.
     #[must_use]
     pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.messages_buffer_size = size;
         self
     }
 
+    /// Sets the command buffer size for the puppet.
+    ///
+    /// This method allows configuring the size of the command buffer used by the puppet.
+    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
+    /// the updated `PuppetBuilder` instance.
     #[must_use]
     pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
         self.commands_buffer_size = size;
         self
     }
 
+    /// Spawns an independent puppet (actor) on the `pptr` runtime.
+    ///
+    /// This method spawns a puppet without a manager, making it independent. It takes a reference
+    /// to the `Puppeter` runtime and returns a `Result` containing the `Address` of the spawned
+    /// puppet on success, or a `PuppetError` on failure.
     pub async fn spawn(self, pptr: &Puppeter) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
@@ -146,6 +184,11 @@ where
         pptr.spawn::<P, P>(self).await
     }
 
+    /// Spawns a puppet (actor) with a manager on the `pptr` runtime.
+    ///
+    /// This method spawns a puppet `P` with a manager `M`. It takes a reference to the `Puppeter`
+    /// runtime and returns a `Result` containing the `Address` of the spawned puppet on success,
+    /// or a `PuppetError` on failure.
     pub async fn spawn_link<M>(self, pptr: &Puppeter) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
@@ -156,6 +199,19 @@ where
 }
 
 impl Context {
+    /// Starts the puppet and its associated puppets.
+    ///
+    /// This method initializes and starts the puppet and its associated puppets based on the
+    /// provided `is_restarting` flag. It handles retries and error reporting in case of failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the puppet fails to start or if the maximum number of retries
+    /// is reached during the start process.
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic.
     pub(crate) async fn start<P>(
         &self,
         puppet: &mut P,
@@ -253,6 +309,19 @@ impl Context {
         Ok(())
     }
 
+    /// Stops the puppet and its associated puppets.
+    ///
+    /// This method stops the puppet and its associated puppets based on the provided
+    /// `is_restarting` flag. It handles retries and error reporting in case of failures.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the puppet fails to stop or if the maximum number of retries
+    /// is reached during the stop process.
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic.
     async fn stop<P>(&self, puppet: &mut P, is_restarting: bool) -> Result<(), PuppetError>
     where
         P: Lifecycle,
@@ -341,6 +410,17 @@ impl Context {
         Ok(())
     }
 
+    /// Restarts the puppet.
+    ///
+    /// This method restarts the puppet by stopping it, resetting its state, and starting it again.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the puppet fails to restart.
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic.
     async fn restart<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
@@ -351,6 +431,18 @@ impl Context {
         self.start(puppet, true).await?;
         Ok(())
     }
+
+    /// Fails the puppet and reports the failure.
+    ///
+    /// This method marks the puppet as failed and reports the failure to its associated puppets.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the failure reporting fails.
+    ///
+    /// # Panics
+    ///
+    /// This method does not panic.
     pub(crate) async fn fail<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
@@ -364,6 +456,9 @@ impl Context {
         }
     }
 
+    /// Checks if a puppet of the specified type exists.
+    ///
+    /// Returns `true` if a puppet of type `P` exists, otherwise `false`.
     #[must_use]
     pub fn is_puppet_exists<P>(&self) -> bool
     where
@@ -372,6 +467,10 @@ impl Context {
         self.pptr.is_puppet_exists::<P>()
     }
 
+    /// Retrieves the current status of the puppet of the specified type.
+    ///
+    /// Returns the current `LifecycleStatus` of the puppet of type `P`, or `None` if the puppet
+    /// does not exist.
     #[must_use]
     pub fn get_status<P>(&self) -> Option<LifecycleStatus>
     where
@@ -381,10 +480,17 @@ impl Context {
         self.pptr.get_puppet_status_by_pid(puppet)
     }
 
+    /// Sets the status of the puppet.
+    ///
+    /// This method updates the status of the puppet to the provided `status`.
     pub(crate) fn set_status(&self, status: LifecycleStatus) {
         self.pptr.set_status_by_pid(self.pid, status);
     }
 
+    /// Checks if the puppet of type `P` is associated with the master of type `M`.
+    ///
+    /// Returns `Some(true)` if the puppet is associated with the master, `Some(false)` if not,
+    /// and `None` if either the puppet or master does not exist.
     #[must_use]
     pub fn has_puppet<M, P>(&self) -> Option<bool>
     where
@@ -396,6 +502,10 @@ impl Context {
         self.pptr.puppet_has_puppet_by_pid(master_pid, puppet_pid)
     }
 
+    /// Retrieves the master of the puppet of the specified type.
+    ///
+    /// Returns the `Pid` of the master associated with the puppet of type `P`, or `None` if the
+    /// puppet does not exist or has no associated master.
     #[must_use]
     pub fn get_master<P>(&self) -> Option<Pid>
     where
@@ -405,6 +515,12 @@ impl Context {
         self.pptr.get_puppet_master_by_pid(puppet)
     }
 
+    /// Sets the master of the puppet of type `P` to the master of type `M`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetOperationError` if the master or puppet does not exist, or if the master
+    /// does not have permission to set the puppet's master.
     pub fn set_master<P, M>(&self) -> Result<(), PuppetOperationError>
     where
         P: Lifecycle,
@@ -416,6 +532,12 @@ impl Context {
             .set_puppet_master_by_pid(self.pid, master_pid, puppet_pid)
     }
 
+    /// Detaches the puppet of the specified type from its current master.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetOperationError` if the puppet does not exist or if the current master
+    /// does not have permission to detach the puppet.
     pub fn detach_puppet<P>(&self) -> Result<(), PuppetOperationError>
     where
         P: Lifecycle,
@@ -424,6 +546,10 @@ impl Context {
         self.pptr.detach_puppet_by_pid(self.pid, puppet_pid)
     }
 
+    /// Checks if the master of type `M` has permission over the puppet of type `P`.
+    ///
+    /// Returns `Some(true)` if the master has permission, `Some(false)` if not, and `None` if
+    /// either the master or puppet does not exist.
     #[must_use]
     pub fn has_permission<M, P>(&self) -> Option<bool>
     where
@@ -436,6 +562,11 @@ impl Context {
             .puppet_has_permission_by_pid(master_pid, puppet_pid)
     }
 
+    /// Spawns a new puppet of type `P` using the provided `PuppetBuilder`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the puppet fails to spawn or initialize.
     pub async fn spawn<P, B>(&self, builder: B) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
@@ -444,6 +575,14 @@ impl Context {
         self.pptr.spawn_puppet_by_pid::<P>(self.pid, builder).await
     }
 
+    /// Reports an unrecoverable failure.
+    ///
+    /// This method sends the provided `CriticalError` to the failure channel, indicating an
+    /// unrecoverable failure in the puppet system.
+    ///
+    /// # Panics
+    ///
+    /// Panics if sending the failure to the channel fails.
     pub fn report_unrecoverable_failure(&self, error: CriticalError) {
         self.pptr
             .failure_tx
@@ -451,6 +590,16 @@ impl Context {
             .expect("Failed to report unrecoverable failure");
     }
 
+    /// Reports a failure to the puppet's master.
+    ///
+    /// This method reports the provided `PuppetError` to the puppet's master for handling. If the
+    /// error is non-critical, it is logged and ignored. If the error is critical and the puppet is
+    /// its own master, it attempts to restart itself. If the puppet has a different master, it sends
+    /// a failure report to the master for handling.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the failure reporting fails or if the puppet's master does not exist.
     #[async_recursion]
     pub async fn report_failure<P>(
         &self,
@@ -493,6 +642,11 @@ impl Context {
         }
     }
 
+    /// Handles an error reported by a child puppet.
+    ///
+    /// This method handles the provided `PuppetError` reported by a child puppet identified by `pid`.
+    /// If the error is non-critical, it is ignored. If the error is critical, it attempts to handle
+    /// the failure based on the puppet's supervision strategy.
     pub async fn handle_child_error<P>(&mut self, puppet: &mut P, pid: Pid, error: PuppetError)
     where
         P: Lifecycle,
@@ -517,6 +671,11 @@ impl Context {
         };
     }
 
+    /// Sends a message of type `E` to the puppet of type `P`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendMessageError` if the message fails to send or if the puppet does not exist.
     pub async fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
     where
         P: Handler<E>,
@@ -525,6 +684,12 @@ impl Context {
         self.pptr.send::<P, E>(message).await
     }
 
+    /// Sends a message of type `E` to the puppet of type `P` and awaits a response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendMessageError` if the message fails to send, if the puppet does not exist,
+    /// or if receiving the response fails.
     pub async fn ask<P, E>(&self, message: E) -> Result<ResponseFor<P, E>, PuppetSendMessageError>
     where
         P: Handler<E>,
@@ -533,6 +698,12 @@ impl Context {
         self.pptr.ask::<P, E>(message).await
     }
 
+    /// Sends a message of type `E` to the puppet of type `P` with a timeout and awaits a response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendMessageError` if the message fails to send, if the puppet does not exist,
+    /// if receiving the response fails, or if the timeout is exceeded.
     pub async fn ask_with_timeout<P, E>(
         &self,
         message: E,
@@ -545,6 +716,9 @@ impl Context {
         self.pptr.ask_with_timeout::<P, E>(message, duration).await
     }
 
+    /// Sends a message of type `E` to the puppet of type `P` without awaiting a response.
+    ///
+    /// This method sends the message asynchronously and does not wait for a response.
     pub fn cast<P, E>(&self, message: E)
     where
         P: Handler<E>,
@@ -553,6 +727,11 @@ impl Context {
         self.pptr.cast::<P, E>(message);
     }
 
+    /// Sends a `ServiceCommand` to the puppet of type `P`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendCommandError` if the command fails to send or if the puppet does not exist.
     pub async fn send_command<P>(
         &self,
         command: ServiceCommand,
@@ -563,6 +742,11 @@ impl Context {
         self.send_command_by_pid(Pid::new::<P>(), command).await
     }
 
+    /// Sends a `ServiceCommand` to the puppet identified by `puppet`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetSendCommandError` if the command fails to send or if the puppet does not exist.
     pub(crate) async fn send_command_by_pid(
         &self,
         puppet: Pid,
@@ -573,6 +757,14 @@ impl Context {
             .await
     }
 
+    /// Handles a `ServiceCommand` received by the puppet.
+    ///
+    /// This method processes the received `ServiceCommand` and performs the corresponding action on
+    /// the puppet, such as starting, stopping, restarting, or failing.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the command handling fails.
     pub(crate) async fn handle_command<P>(
         &mut self,
         puppet: &mut P,
@@ -602,6 +794,13 @@ impl Context {
         }
     }
 
+    /// Starts all the puppets associated with the current puppet.
+    ///
+    /// This method sends a start command to all the puppets associated with the current puppet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if starting any of the associated puppets fails.
     pub(crate) async fn start_all_puppets(
         &self,
         command: &ServiceCommand,
@@ -641,6 +840,14 @@ impl Context {
         // If we reach here, all puppets were started successfully.
         Ok(())
     }
+
+    /// Stops all the puppets associated with the current puppet.
+    ///
+    /// This method sends a stop command to all the puppets associated with the current puppet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if stopping any of the associated puppets fails.
     pub(crate) async fn stop_all_puppets(
         &self,
         command: &ServiceCommand,
@@ -681,6 +888,13 @@ impl Context {
         Ok(())
     }
 
+    /// Fails all the puppets associated with the current puppet.
+    ///
+    /// This method sends a fail command to all the puppets associated with the current puppet.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if failing any of the associated puppets fails.
     pub(crate) async fn fail_all_puppets<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
     where
         P: Lifecycle,
@@ -700,6 +914,19 @@ impl Context {
         Ok(())
     }
 
+    /// Adds a new resource to the resource collection.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime. If a
+    /// resource with the same type already exists, an error will be returned.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ResourceAlreadyExist` error if a resource of the same type already exists in the
+    /// collection.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock fails.
     pub fn add_resource<T>(&self, resource: T) -> Result<(), ResourceAlreadyExist>
     where
         T: Send + Sync + Clone + 'static,
@@ -707,6 +934,15 @@ impl Context {
         self.pptr.add_resource(resource)
     }
 
+    /// Retrieves a cloned copy of the resource of type `T`, if it exists.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// Returns `Some(T)` if the resource exists, otherwise `None`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock fails.
     #[must_use]
     pub fn get_resource<T>(&self) -> Option<T>
     where
@@ -715,6 +951,16 @@ impl Context {
         self.pptr.get_resource::<T>()
     }
 
+    /// Borrows the resource of type `T` and passes it to the provided closure `f`.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// Returns `Some(R)` if the resource exists, where `R` is the return type of the closure `f`.
+    /// Returns `None` if the resource doesn't exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock fails.
     pub fn with_resource<T, F, R>(&self, f: F) -> Option<R>
     where
         T: Send + Sync + Clone + 'static,
@@ -723,6 +969,16 @@ impl Context {
         self.pptr.with_resource::<T, F, R>(f)
     }
 
+    /// Mutably borrows the resource of type `T` and passes it to the provided closure `f`.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// Returns `Some(R)` if the resource exists, where `R` is the return type of the closure `f`.
+    /// Returns `None` if the resource doesn't exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the mutex lock fails.
     pub fn with_resource_mut<T, F, R>(&self, f: F) -> Option<R>
     where
         T: Send + Sync + Clone + 'static,
@@ -731,6 +987,13 @@ impl Context {
         self.pptr.with_resource_mut::<T, F, R>(f)
     }
 
+    /// Retrieves a cloned copy of the resource of type `T`, or panics if it doesn't exist.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the resource doesn't exist or if the mutex lock fails.
     #[must_use]
     pub fn expect_resource<T>(&self) -> T
     where
@@ -739,24 +1002,44 @@ impl Context {
         self.pptr.expect_resource::<T>()
     }
 
+    /// Creates a new non-critical `PuppetError` with the given error message.
+    ///
+    /// The error message can be any type that implements `ToString`.
     pub fn non_critical_error<E: ToString + ?Sized>(&self, error: &E) -> PuppetError {
         PuppetError::non_critical(self.pid, error)
     }
+
+    /// Creates a new critical `PuppetError` with the given error message.
+    ///
+    /// The error message can be any type that implements `ToString`.
     pub fn critical_error<E: ToString + ?Sized>(&self, error: &E) -> PuppetError {
         PuppetError::critical(self.pid, error)
     }
 }
 
+/// Represents the response type for a handler of message type `E` in puppet type `P`.
 pub type ResponseFor<P, E> = <P as Handler<E>>::Response;
 
+/// Defines the `Handler` trait for handling messages of type `E` in a puppet.
+///
+/// The `Handler` trait is implemented by puppets to define how they handle specific message types.
+/// It requires the implementation of the `handle_message` method, which processes the received
+/// message and returns a response.
 #[async_trait]
 pub trait Handler<E>: Lifecycle
 where
     E: Message,
 {
+    /// The type of the response returned by the handler.
     type Response: Send + 'static;
+    /// The type of the executor used to handle the message.
     type Executor: Executor<E> + Send + 'static;
 
+    /// Handles the received message and returns a response.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if the message handling fails.
     async fn handle_message(
         &mut self,
         msg: E,
@@ -764,8 +1047,22 @@ where
     ) -> Result<Self::Response, PuppetError>;
 }
 
+/// Represents a handle to a puppet of type `P`.
+///
+/// The `PuppetHandle` provides access to the puppet's lifecycle status, message receiver, and
+/// command receiver. It allows interacting with the puppet by sending messages and commands.
+///
+/// The generic parameter `P` specifies the type of the puppet and must implement the `Lifecycle`
+/// trait.
+///
+/// # Fields
+///
+/// - `pid`: The process ID (`Pid`) of the puppet.
+/// - `status_rx`: A `watch::Receiver` for receiving updates on the puppet's lifecycle status.
+/// - `message_rx`: A `Mailbox<P>` for receiving messages specific to the puppet type `P`.
+/// - `command_rx`: A `ServiceMailbox` for receiving general commands.
 #[derive(Debug)]
-pub struct PuppetHandle<P>
+pub(crate) struct PuppetHandle<P>
 where
     P: Lifecycle,
 {
