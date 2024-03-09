@@ -1282,47 +1282,37 @@ pub(crate) async fn run_puppet_loop<P>(
 
     loop {
         tokio::select! {
-            res = puppet_status.changed() => {
-                if let Ok(()) = res {
-                    if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
-                        | LifecycleStatus::Failed) {
-                        tracing::info!(puppet = %puppeter.pid, "Stopping loop due to puppet status change");
-                        break;
-                    }
-                } else {
-                    tracing::debug!(puppet = %puppeter.pid, "Stopping loop due to closed puppet status channel");
+            Ok(()) = puppet_status.changed() => {
+                if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
+                    | LifecycleStatus::Failed) {
+                    tracing::info!(puppet = %puppeter.pid, "Stopping loop due to puppet status change");
                     break;
                 }
             }
-            res = handle.command_rx.recv() => {
-                if let Some(mut service_packet) = res {
-                    if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                        if let Err(err) = service_packet.handle_command(&mut puppet, &mut puppeter).await {
-                            tracing::error!(puppet = %puppeter.pid, "Failed to handle command: {}", err);
-                        }
-                    } else {
-                        tracing::debug!(puppet = %puppeter.pid, "Ignoring command due to non-Active puppet status");
-                        let error_response = PuppetCannotHandleMessage::new(puppeter.pid, *puppet_status.borrow()).into();
-                        service_packet.reply_error(error_response);
+            Some(mut service_packet) = handle.command_rx.recv() => {
+                if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
+                    if let Err(err) = service_packet.handle_command(&mut puppet, &mut puppeter).await {
+                        tracing::error!(puppet = %puppeter.pid, "Failed to handle command: {}", err);
                     }
                 } else {
-                    tracing::debug!(puppet = %puppeter.pid, "Stopping loop due to closed command channel");
-                    break;
+                    tracing::debug!(puppet = %puppeter.pid, "Ignoring command due to non-Active puppet status");
+                    let status = *puppet_status.borrow();
+                    let error_response = PuppetCannotHandleMessage::new(puppeter.pid, status).into();
+                    service_packet.reply_error(error_response);
                 }
             }
-            res = handle.message_rx.recv() => {
-                if let Some(mut envelope) = res {
-                    if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                        envelope.handle_message(&mut puppet, &mut puppeter).await;
-                    } else {
-                        let status = *puppet_status.borrow();
-                        tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
-                        envelope.reply_error(&puppeter, PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
-                    }
+            Some(mut envelope) = handle.message_rx.recv() => {
+                let status = *puppet_status.borrow();
+                if matches!(status, LifecycleStatus::Active) {
+                    envelope.handle_message(&mut puppet, &mut puppeter).await;
                 } else {
-                    tracing::debug!(puppet = %puppeter.pid,  "Stopping loop due to closed message channel");
-                    break;
+                    tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
+                    envelope.reply_error(&puppeter, PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
                 }
+            }
+            else => {
+                tracing::debug!(puppet = %puppeter.pid, "Stopping loop due to closed channels");
+                break;
             }
         }
     }
