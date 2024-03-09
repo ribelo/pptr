@@ -603,20 +603,13 @@ impl PuppetError {
 pub struct RetryError {
     pub message: String,
 }
-#[derive(Debug, Error)]
-#[error("Reached max retry limit: {message}")]
-pub struct RetryError {
-    pub message: String,
-}
 
 impl RetryError {
-    <doc>
     pub fn new<T: ToString + ?Sized>(message: &T) -> Self {
         Self {
             message: message.to_string(),
         }
     }
-    <doc>
 }
 
 /// Represents an error that can occur when sending a message to a puppet.
