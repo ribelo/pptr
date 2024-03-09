@@ -11,21 +11,59 @@ use crate::{
     puppet::{Context, Handler, Lifecycle, ResponseFor},
 };
 
+/// A marker trait for types that can be used as messages.
+///
+/// This trait is automatically implemented for any type that satisfies the following bounds:
+/// - `fmt::Debug`: The type must implement the `Debug` trait for debugging and error reporting.
+/// - `Send`: The type must be safe to send across thread boundaries.
+/// - `'static`: The type must have a static lifetime.
+///
+/// By implementing this trait, a type indicates that it can be used as a message in a messaging
+/// system or communication protocol.
+///
 pub trait Message: fmt::Debug + Send + 'static {}
 impl<T> Message for T where T: fmt::Debug + Send + 'static {}
 
+/// An envelope trait is the visitor pattern for message handling.
+///
+/// This trait allows sending messages that implement the `Envelope` trait,
+/// enabling the sending of any type as a message.
+///
+/// The `handle_message` method takes a mutable reference to the puppet and the
+/// context on which the message should be executed.
+///
+/// The `reply_error` method is a convenience function for sending an error as a
+/// response.
 #[async_trait]
 pub trait Envelope<P>: Send
 where
     P: Lifecycle,
 {
+    /// Handles the message using the provided puppet and context.
     async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context);
+    /// Sends an error as a response using the provided context.
     async fn reply_error(&mut self, ctx: &Context, err: PuppetError);
 }
 
+/// A type alias for a one-shot sender used to send a reply.
+///
+/// The `ReplySender` is a type alias for `oneshot::Sender` that sends a `Result` containing either
+/// the response of type `T` or a `PuppetError`.
 pub type ReplySender<T> = oneshot::Sender<Result<T, PuppetError>>;
+/// A type alias for a one-shot receiver used to receive a reply.
+///
+/// The `ReplyReceiver` is a type alias for `oneshot::Receiver` that receives a `Result` containing
+/// either the response of type `T` or a `PuppetError`.
 pub type ReplyReceiver<T> = oneshot::Receiver<Result<T, PuppetError>>;
 
+/// Represents a packet that wraps a message and specifies its type and reply address.
+///
+/// The `Packet` struct is used to encapsulate a message of type `E` along with an optional reply
+/// address. It is generic over two type parameters:
+/// - `P`: The handler type that can handle the message type `E`.
+/// - `E`: The message type that implements the `Message` trait.
+///
+/// The packet can be created with or without a reply address using the provided constructor methods.
 pub struct Packet<P, E>
 where
     P: Handler<E>,
@@ -41,6 +79,14 @@ where
     P: Handler<E>,
     E: Message,
 {
+    /// Creates a new `Packet` without a reply address.
+    ///
+    /// This method is a shorthand for creating a packet that does not expect a response.
+    ///
+    /// # Returns
+    ///
+    /// A new `Packet` instance containing the provided message and no reply address.
+    #[must_use]
     pub fn without_reply(message: E) -> Self {
         Self {
             message: Some(message),
@@ -48,6 +94,15 @@ where
             _phantom: PhantomData,
         }
     }
+
+    /// Creates a new `Packet` with a reply address.
+    ///
+    /// This method is a shorthand for creating a packet that expects a response.
+    ///
+    /// # Returns
+    ///
+    /// A new `Packet` instance containing the provided message and reply address.
+    #[must_use]
     pub fn with_reply(
         message: E,
         reply_address: oneshot::Sender<Result<ResponseFor<P, E>, PuppetError>>,
@@ -90,6 +145,14 @@ where
     }
 }
 
+/// Represents a packet of data sent to a service for processing.
+///
+/// A `ServicePacket` contains an `ServiceCommand` and an reply address.
+/// The reply address is used to send a response back to the sender of the packet.
+///
+/// The `cmd` field holds the command to be executed by the service.
+/// The `reply_address` field contains a `Sender` for sending the result of the command
+/// back to the caller, if a reply is expected.
 pub struct ServicePacket {
     pub(crate) cmd: Option<ServiceCommand>,
     pub(crate) reply_address: Option<oneshot::Sender<Result<(), PuppetError>>>,
@@ -97,6 +160,13 @@ pub struct ServicePacket {
 
 impl ServicePacket {
     #[must_use]
+    /// Creates a new `ServicePacket` with a reply address.
+    ///
+    /// This method is a shorthand for creating a service packet that expects a response.
+    ///
+    /// # Returns
+    ///
+    /// A new `ServicePacket` instance containing the provided command and reply address.
     pub fn with_reply(
         cmd: ServiceCommand,
         reply_address: oneshot::Sender<Result<(), PuppetError>>,
@@ -107,6 +177,13 @@ impl ServicePacket {
         }
     }
 
+    /// Creates a new `ServicePacket` without a reply address.
+    ///
+    /// This method is a shorthand for creating a service packet that does not expect a response.
+    ///
+    /// # Returns
+    ///
+    /// A new `ServicePacket` instance containing the provided command and no reply address.
     #[must_use]
     pub fn without_reply(cmd: ServiceCommand) -> Self {
         Self {
@@ -115,6 +192,20 @@ impl ServicePacket {
         }
     }
 
+    /// Handles the command contained in the `ServicePacket`.
+    ///
+    /// This method takes ownership of the command and reply address stored in the `ServicePacket`,
+    /// handles the command using the provided `puppet` and `ctx`, and sends the response back
+    /// through the reply address.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `PuppetError` if:
+    /// - The `ServicePacket` has no command.
+    /// - The `ServicePacket` has no reply address.
+    /// - Sending the response over the oneshot channel fails.
+    ///
+    /// If the command handling results in a critical error, it is reported using `ctx.report_failure()`.
     pub(crate) async fn handle_command<P>(
         &mut self,
         puppet: &mut P,
@@ -146,6 +237,10 @@ impl ServicePacket {
         Ok(())
     }
 
+    /// Replies with an error to the sender of the `ServicePacket`.
+    ///
+    /// If the `ServicePacket` has a reply address, this method sends the provided error
+    /// over the oneshot channel. If the send operation fails, the error is silently ignored.
     pub(crate) fn reply_error(&mut self, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
             let _ = reply_address.send(Err(err));
@@ -153,12 +248,23 @@ impl ServicePacket {
     }
 }
 
+/// Represents the stages of a restart operation.
+///
+/// - `Start`: Indicates the start of the restart process.
+/// - `Stop`: Indicates the stop phase of the restart process.
 #[derive(Debug, Clone, strum::Display, PartialEq, Eq)]
 pub enum RestartStage {
     Start,
     Stop,
 }
 
+/// Represents the commands that can be sent to a service.
+///
+/// - `Start`: Starts the puppet.
+/// - `Stop`: Stops the puppet.
+/// - `Restart`: Restarts the puppet. The `stage` field indicates the current stage of the restart process.
+/// - `ReportFailure`: Reports a failure in the service identified by `pid` with the given `error`.
+/// - `Fail`: Indicates a failure in the puppet.
 #[derive(Debug, Clone, strum::Display)]
 pub enum ServiceCommand {
     Start,
