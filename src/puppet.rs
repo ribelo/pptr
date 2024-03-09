@@ -18,24 +18,62 @@ use crate::{
     supervision::{RetryConfig, RetryConfigBuilder, SupervisionStrategy},
 };
 
+/// A trait that manages the entire lifecycle of puppets (actors) in an actor model.
+///
+/// The `Lifecycle` trait defines methods for handling the initialization, starting,
+/// stopping, and resetting of puppets. It also specifies the associated type
+/// `Supervision`, which represents the supervision strategy used for managing the
+/// puppet's lifecycle.
+///
+/// Implementors of this trait must be `Send`, `Sync`, `Sized`, `Clone`, and `'static`.
 #[allow(unused_variables)]
 #[async_trait]
 pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
+    /// The supervision strategy used for managing the puppet's lifecycle.
     type Supervision: SupervisionStrategy + Send + Sync;
 
+    /// Resets the puppet to its initial state.
+    ///
+    /// This method is called when the puppet needs to be reset to its initial state.
+    /// It takes a reference to the puppet's context (`ctx`) and returns a new instance
+    /// of the puppet on success, or a `CriticalError` if the reset operation fails.
+    ///
+    /// The default implementation clones the current instance of the puppet.
     async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
         Ok(self.clone())
     }
 
+    /// Initializes the puppet.
+    ///
+    /// This method is called when the puppet is being initialized. It takes a mutable
+    /// reference to the puppet instance and a reference to the puppet's context (`ctx`).
+    ///
+    /// The default implementation logs a debug message indicating that the puppet is
+    /// being initialized.
     async fn on_init(&mut self, ctx: &Context) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Initializing puppet");
         Ok(())
     }
+
+    /// Starts the puppet.
+    ///
+    /// This method is called when the puppet is being started. It takes a mutable
+    /// reference to the puppet instance and a reference to the puppet's context (`ctx`).
+    ///
+    /// The default implementation logs a debug message indicating that the puppet is
+    /// being started.
     async fn on_start(&mut self, ctx: &Context) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Starting puppet" );
         Ok(())
     }
 
+    /// Stops the puppet.
+    ///
+    /// This method is called when the puppet is being stopped. It takes a mutable
+    /// reference to the puppet instance and a reference to the puppet's context (`ctx`).
+    ///
+    /// The default implementation logs a debug message indicating that the puppet is
+    /// being stopped.
     async fn on_stop(&mut self, ctx: &Context) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Stopping puppet");
         Ok(())

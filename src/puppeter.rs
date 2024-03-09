@@ -43,24 +43,40 @@ pub type StatusChannels = (
 /// `FxIndexSet` is an alias for `IndexSet` from the `indexmap` crate, bundled with `FxHasher`.
 type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 
-/// `Puppeter` is the core struct for managing actors within the system.
+/// The `Puppeter` struct is the central entity responsible for managing actors within the system.
 ///
-/// It handles the lifecycle, communication, and resource management of actors.
-/// Moreover, it manages critical errors that can occur in the system.
+/// It handles the lifecycle, communication, and resource management of actors, as well as dealing
+/// with critical errors that may occur during system operation.
+///
+/// The struct maintains mappings between actor process IDs (`Pid`) and various components such as
+/// `Postman` instances for message passing, `ServicePostman` instances for handling service requests,
+/// and `StatusChannels` for monitoring actor status. It also keeps track of the relationships between
+/// master actors and their child actors (puppets) using the `master_to_puppets` and `puppet_to_master`
+/// fields.
+///
+/// Additionally, the `Puppeter` manages shared resources accessible by the actors, utilizing a
+/// dedicated `tokio` executor for running actor tasks. Critical errors that cannot be handled
+/// internally are reported through the `failure_tx` and `failure_rx` fields, which are used for
+/// sending and receiving `CriticalError` instances, respectively.
 ///
 /// # Fields
 ///
-/// * `message_postmans` - A mapping between a process ID (`Pid`) and its `Postman` for message
-/// passing.
-/// * `service_postmans` - A mapping between a `Pid` and its `ServicePostman` for service requests.
-/// * `statuses` - A mapping between a `Pid` and its `StatusChannels` for monitoring actor status.
-/// * `master_to_puppets` - A mapping between a master actor and its child actors.
-/// * `puppet_to_master` - A mapping from a child actor (puppet) to its master.
-/// * `resources` - Holds shared resources accessible by the actors.
-/// * `executor` - A dedicated `tokio` executor for running actor tasks.
-/// * `failure_tx` - An unbounded sender for reporting critical errors that cannot be handled
-/// internally.
-/// * `failure_rx` - A receiver for critical errors reported by the system.
+/// * `message_postmans`: A mapping between a process ID (`Pid`) and its corresponding `Postman`
+///   instance, used for message passing between actors.
+/// * `service_postmans`: A mapping between a `Pid` and its associated `ServicePostman` instance,
+///   responsible for handling service requests.
+/// * `statuses`: A mapping between a `Pid` and its `StatusChannels`, used for monitoring the status
+///   of actors.
+/// * `master_to_puppets`: A mapping between a master actor's `Pid` and the `Pid`s of its child actors
+///   (puppets).
+/// * `puppet_to_master`: A mapping from a child actor's (puppet's) `Pid` to its master actor's `Pid`.
+/// * `resources`: A collection of shared resources accessible by the actors, stored as a mapping
+///   between a resource ID (`Id`) and an `Arc<Mutex<BoxedAny>>`.
+/// * `executor`: A dedicated `tokio` executor used for running actor tasks.
+/// * `failure_tx`: An unbounded sender for reporting critical errors that cannot be handled
+///   internally.
+/// * `failure_rx`: A receiver for critical errors reported by the system, wrapped in an `Arc` and
+///   `AtomicTake` for concurrent access.
 #[derive(Clone, Debug)]
 pub struct Puppeter {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
