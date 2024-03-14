@@ -182,7 +182,7 @@ impl RetryConfigBuilder {
 
 impl RetryConfig {
     /// Resets the current retry count and last retry timestamp.
-    fn reset_count(&self) {
+    pub fn reset_count(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.current_retry_count = 0;
         inner.last_retry = Instant::now();

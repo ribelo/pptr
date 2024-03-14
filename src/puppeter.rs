@@ -2,7 +2,7 @@ use std::{
     hash::BuildHasherDefault,
     num::NonZeroUsize,
     pin::Pin,
-    sync::{Arc, Mutex, RwLock},
+    sync::{Arc, Mutex},
 };
 
 use atomic_take::AtomicTake;
@@ -209,23 +209,6 @@ impl Puppeter {
     /// receiving fails.
     pub async fn wait_for_unrecoverable_failure(self) -> CriticalError {
         self.failure_rx.take().unwrap().recv().await.unwrap()
-    }
-
-    /// Proxy for `register_puppet_by_pid`.
-    pub(crate) fn register_puppet<M, P>(
-        &self,
-        postman: Postman<P>,
-        service_postman: ServicePostman,
-        status_tx: watch::Sender<LifecycleStatus>,
-        status_rx: watch::Receiver<LifecycleStatus>,
-    ) -> Result<(), PuppetError>
-    where
-        M: Lifecycle,
-        P: Lifecycle,
-    {
-        // Create Pid references for the master and puppet
-        let master = Pid::new::<M>();
-        self.register_puppet_by_pid(master, postman, service_postman, status_tx, status_rx)
     }
 
     /// Registers a puppet within the system with all necessary data.
@@ -1326,9 +1309,7 @@ mod tests {
 
     use async_trait::async_trait;
 
-    use crate::{
-        executor::SequentialExecutor, prelude::CriticalError, supervision::strategy::OneForAll,
-    };
+    use crate::{executor::SequentialExecutor, supervision::strategy::OneForAll};
 
     use super::*;
 
@@ -1455,8 +1436,9 @@ mod tests {
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(service_tx);
+        let master_pid = Pid::new::<M>();
 
-        pptr.register_puppet::<M, P>(postman, service_postman, status_tx, status_rx)
+        pptr.register_puppet_by_pid(master_pid, postman, service_postman, status_tx, status_rx)
     }
 
     #[tokio::test]
