@@ -1,3 +1,29 @@
+//! Error types and related functionality for the `pptr` library.
+//!
+//! This module defines various error types that can occur within the `pptr` library, such as
+//! errors related to puppets, resources, permissions, and message handling. It provides a
+//! consistent and structured way to handle and propagate errors throughout the library.
+//!
+//! The main error types defined in this module include:
+//!
+//! - [`PuppetDoesNotExistError`]: Represents an error when a referenced puppet does not exist.
+//! - [`ResourceAlreadyExist`]: Represents an error when attempting to create a resource that already exists.
+//! - [`PuppetAlreadyExist`]: Represents an error when attempting to create a puppet with an ID that already exists.
+//! - [`PermissionDeniedError`]: Represents an error when a master tries to perform an operation on a puppet without sufficient permissions.
+//! - [`PuppetCannotHandleMessage`]: Represents an error when a puppet cannot handle a message due to its current lifecycle status.
+//! - [`NonCriticalError`]: Represents a non-critical error that occurred in a puppet.
+//! - [`CriticalError`]: Represents a critical error that occurred in a puppet.
+//! - [`PuppetError`]: An enum that represents either a non-critical or critical error in a puppet.
+//! - [`RetryError`]: Represents an error that occurs when the maximum retry limit is reached.
+//! - [`PuppetSendMessageError`]: Represents an error that can occur when sending a message to a puppet.
+//! - [`PuppetSendCommandError`]: Represents an error that can occur when sending a command to a puppet.
+//! - [`PostmanError`]: Represents errors that can occur in the postman.
+//! - [`PuppetRegisterError`]: Represents errors that can occur when registering a puppet.
+//! - [`PuppetOperationError`]: Represents errors that can occur during puppet operations.
+//!
+//! These error types provide detailed information about the nature of the error, including the
+//! associated puppet ID, error messages, and other relevant details. They are designed to be used
+//! in conjunction with the `thiserror` crate for easy error handling and propagation.
 use std::fmt;
 
 use thiserror::Error;

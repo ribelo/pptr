@@ -1,3 +1,18 @@
+//! Defines message types and communication primitives for the puppet system.
+//!
+//! This module provides the core components for message-based communication between puppets
+//! and the service that manages them. It defines traits for messages and envelopes, as well
+//! as structs for packets and postmen.
+//!
+//! The main types and traits in this module include:
+//!
+//! - [`Message`]: A marker trait for types that can be used as messages.
+//! - [`Envelope`]: A trait for message envelopes that can be handled by puppets.
+//! - [`Packet`]: A struct representing a message packet with an optional reply address.
+//! - [`ServicePacket`]: A struct representing a packet sent to a service for processing.
+//! - [`Postman`]: A struct for sending messages to puppets.
+//! - [`ServicePostman`]: A struct for sending commands to services.
+//!
 use std::{fmt, marker::PhantomData};
 
 use async_trait::async_trait;
