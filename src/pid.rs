@@ -1,3 +1,40 @@
+//! Provides unique identifiers for puppets and resources.
+//!
+//! This module defines two main types: `Id` and `Pid`.
+//!
+//! `Id` is an opaque type that wraps a `u64` value and provides a way to uniquely identify
+//! and compare different entities in the system. It can be created using the `Id::new`
+//! function, which generates a unique `Id` based on the `TypeId` of a given type `T`.
+//!
+//! `Pid` is similar to `Id` but includes an additional `name_fn` field that provides a way
+//! to retrieve the name of the puppet type statically. It can be created using the
+//! `Pid::new` function, which generates a unique `Pid` based on the `Id` of a puppet type
+//! `P` and assigns the `_name` function as the `name_fn` field.
+//!
+//! # Examples
+//!
+//! ```
+//! use your_crate::Id;
+//!
+//! struct MyType;
+//! let id = Id::new::<MyType>();
+//! println!("Unique ID: {}", id);
+//! ```
+//!
+//! ```
+//! use your_crate::{Id, Pid, Lifecycle};
+//!
+//! struct MyPuppet;
+//! impl Lifecycle for MyPuppet {}
+//!
+//! let pid = Pid::new::<MyPuppet>();
+//! println!("Puppet ID: {}", pid);
+//! println!("Puppet Name: {}", pid.name());
+//!
+//! let id = pid.to_id();
+//! println!("Converted back to Id: {}", id);
+//! ```
+
 use std::{
     any::TypeId,
     fmt,
