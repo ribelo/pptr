@@ -122,7 +122,7 @@ impl Pid {
     ///
     /// This function does not panic.
     #[must_use]
-    pub fn to_id(&self) -> Id {
+    pub fn as_id(&self) -> Id {
         self.id
     }
 
