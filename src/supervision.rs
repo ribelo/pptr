@@ -1,3 +1,46 @@
+//! Supervision module for handling failures in a puppet system.
+//!
+//! This module provides supervision strategies and retry configuration for managing failures
+//! in a puppet system. The available supervision strategies are:
+//!
+//! - [`OneToOne`]: Handles failures individually for each puppet.
+//! - [`OneForAll`]: Restarts all puppets when any one fails.
+//! - [`RestForOne`]: Restarts the failed puppet and all puppets started after it.
+//!
+//! The module also includes a [`RetryConfig`] struct and [`RetryConfigBuilder`] for configuring
+//! retry behavior, such as the maximum number of retries, the duration within which retries
+//! should occur, and the time to wait between retry attempts.
+//!
+//! The [`SupervisionStrategy`] trait defines the interface for implementing custom supervision
+//! strategies.
+//!
+//! # Examples
+//!
+//! Using a supervision strategy:
+//!
+//! ```
+//! use pptr::supervision::strategy::OneForAll;
+//! use pptr::supervision::SupervisionStrategy;
+//!
+//! # async fn handle_failure(post_office: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
+//! let result = OneForAll::handle_failure(post_office, master, puppet).await;
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Configuring retry behavior:
+//!
+//! ```
+//! use std::time::Duration;
+//! use pptr::supervision::RetryConfigBuilder;
+//!
+//! let config = RetryConfigBuilder::new()
+//!     .with_max_retries(3)
+//!     .within_duration(Duration::from_secs(30))
+//!     .with_time_between(Duration::from_secs(5))
+//!     .build();
+//! ```
+
 use std::{
     fmt,
     sync::{Arc, Mutex},
