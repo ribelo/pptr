@@ -906,7 +906,7 @@ impl Context {
                 // Attempt to send the stop command to the current puppet.
                 if let Err(error) = self.send_command_by_pid(*pid, ServiceCommand::Fail).await {
                     if let Err(err) = self.report_failure(puppet, error.into()).await {
-                        self.critical_error(&err);
+                        return Err(self.critical_error(&err));
                     }
                 }
             }
