@@ -1,3 +1,17 @@
+<h1 align="center">ππtρ/pptr</h1>
+
+<p align="center">
+  <a href="https://github.com/ribelo/pptr"><img alt="github" src="https://img.shields.io/badge/github-ribelo/pptr-8da0cb?style=for-the-badge&labelColor=555555&logo=github" height="20"></a>
+  <a href="https://crates.io/crates/pptr"><img alt="crates.io" src="https://img.shields.io/crates/v/pptr.svg?style=for-the-badge&color=fc8d62&logo=rust" height="20"></a>
+  <a href="https://docs.rs/pptr"><img alt="docs.rs" src="https://img.shields.io/badge/docs.rs-pptr-66c2a5?style=for-the-badge&labelColor=555555&logo=docs.rs" height="20"></a>
+</p>
+
+<p align="center">
+  <!-- <a href="https://github.com/ribelo/pptr/actions"><img alt="Build Status" src="https://github.com/ribelo/pptr/workflows/CI/badge.svg"></a> -->
+  <a href="https://codecov.io/gh/ribelo/pptr"><img alt="Coverage" src="https://codecov.io/gh/ribelo/pptr/graph/badge.svg?token=7CVCP09OQN"></a>
+  <!-- <a href="https://deps.rs/repo/github/ribelo/pptr"><img alt="Dependencies" src="https://deps.rs/repo/github/ribelo/pptr/status.svg"></a> -->
+</p>
+
 # Puppeter: A Flexible Actor-Based Framework for Asynchronous Systems in Rust
 
 Puppeter is a powerful and flexible actor-based framework designed to simplify
@@ -173,8 +187,136 @@ your `Cargo.toml` file:
 puppeter = "0.1.68"
 ```
 
+```rust
+use puppeter::prelude::*;
+
+#[derive(Default)]
+struct PingActor;
+
+#[async_trait]
+impl Lifecycle for PingActor {
+    // This actor uses the 'OneForAll' supervision strategy.
+    // If any child actor fails, all child actors will be restarted.
+    type Supervision = OneForAll;
+
+    // The 'reset' method is called when the actor needs to reset its state.
+    // In this example, we simply return a default instance of 'PingActor'.
+    async fn reset(&self, _ctx: &Context) -> Result<Self, CriticalError> {
+        Ok(Self::default())
+    }
+}
+
+// We define a 'Ping' message that contains a counter value.
+#[derive(Debug)]
+struct Ping(u32);
+
+// The 'Handler' trait defines how the actor should handle incoming messages.
+// It is a generic trait, which allows defining message handling for specific message types,
+// rather than using a single large enum for all possible messages.
+// This provides better type safety and easier maintainability.
+// By implementing the 'Handler' trait for a particular message type and actor,
+// you can define the specific behavior for handling that message within the actor.
+// Additionally, the 'Handler' trait can be implemented multiple times for the same message type,
+// allowing different actors to handle the same message type in their own unique way.
+// This flexibility enables better separation of concerns and modular design in the actor system.
+#[async_trait]
+impl Handler<Ping> for PingActor {
+
+    // The 'Response' associated type specifies the type of the response returned by the handler.
+    // In this case, the response type is '()', which means the handler doesn't return any meaningful value.
+    // It is common to use '()' as the response type when the handler only performs side effects and doesn't need to return a specific value.
+    type Response = ();
+
+    // The 'Executor' associated type specifies the execution strategy for handling messages.
+    // It determines how the actor processes incoming messages concurrently.
+    // The 'SequentialExecutor' processes messages sequentially, one at a time, in the order they are received.
+    // This ensures that the handler for each message is executed to completion before processing the next message.
+    // The 'SequentialExecutor' is suitable when the order of message processing is important and the handler doesn't perform any blocking operations.
+    type Executor = SequentialExecutor;
+
+    // The 'handle_message' method is called when the actor receives a 'Ping' message.
+    // It prints the received counter value and sends a 'Pong' message to 'PongActor'
+    // with an incremented counter value, until the counter reaches 10.
+    async fn handle_message(&mut self, msg: Ping, ctx: &Context) -> Result<Self::Response, PuppetError> {
+        // The 'ctx' parameter is a reference to the 'Context' struct, which encapsulates
+        // the actor's execution context and provides access to the same methods as the 'pptr' instance.
+        // It allows the actor to send messages, spawn new actors, and perform other actions.
+        // If an actor is spawned using 'ctx', it automatically assigns the spawning actor as its supervisor.
+        // The 'ctx' parameter enables safe and consistent interaction with the actor system,
+        // abstracting away the underlying complexity.
+
+        println!("Ping received: {}", msg.0);
+        if msg.0 < 10 {
+            // By using 'ctx.send', the actor can send messages to other actors directly from the message handler,
+            // ensuring proper error propagation and potential supervision.
+            ctx.send::<PongActor, _>(Pong(msg.0 + 1)).await?;
+        } else {
+            println!("Ping-Pong finished!");
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Default)]
+struct PongActor;
+
+// By default, similar to 'PingActor', the 'reset' method returns a default instance of 'PongActor'.
+#[async_trait]
+impl Lifecycle for PongActor {
+    type Supervision = OneForAll;
+}
+
+// We define a 'Pong' message that contains a counter value.
+#[derive(Debug)]
+struct Pong(u32);
+
+#[async_trait]
+impl Handler<Pong> for PongActor {
+    type Response = ();
+    type Executor = SequentialExecutor;
+
+    // The 'handle_message' method for 'PongActor' is similar to 'PingActor'.
+    // It prints the received counter value and sends a 'Ping' message back to 'PingActor'
+    // with an incremented counter value, until the counter reaches 10.
+    async fn handle_message(&mut self, msg: Pong, ctx: &Context) -> Result<Self::Response, PuppetError> {
+        println!("Pong received: {}", msg.0);
+
+        if msg.0 < 10 {
+            ctx.send::<PingActor, _>(Ping(msg.0 + 1)).await?;
+        } else {
+            println!("Ping-Pong finished!");
+        }
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), PuppetError> {
+
+    // Create a new instance of the Puppeter.
+    let pptr = Puppeter::new();
+
+    // Spawn a 'PingActor' and specify 'PingActor' as its own supervisor.
+    // This means that 'PingActor' will manage itself.
+    pptr.spawn::<PingActor, PingActor>(PuppetBuilder::new(PingActor::default())).await?;
+
+    // Spawn a 'PongActor' using the shorter 'spawn_self' method.
+    // This is equivalent to specifying 'PongActor' as its own supervisor.
+    pptr.spawn_self(PuppetBuilder::new(PongActor::default())).await?;
+
+    // Send an initial 'Ping' message to 'PingActor' with a counter value of 0.
+    // This starts the ping-pong game between 'PingActor' and 'PongActor'.
+    pptr.send::<PingActor, _>(Ping(0)).await?;
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    Ok(())
+}
+```
+
 For detailed usage examples and API documentation, please refer to the
-[Puppeter Documentation](https://docs.puppeter.rs).
+[Puppeter Documentation](https://docs.rs/pptr).
 
 ## License
 
