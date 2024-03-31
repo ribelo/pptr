@@ -1029,7 +1029,6 @@ impl Puppeter {
         };
 
         let handle = PuppetHandle {
-            pid,
             status_rx: status_rx.clone(),
             message_rx: Mailbox::new(message_rx),
             command_rx: ServiceMailbox::new(command_rx),
