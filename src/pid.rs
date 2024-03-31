@@ -64,22 +64,6 @@ impl Id {
         type_id.hash(&mut hasher);
         Self(hasher.finish())
     }
-
-    /// Converts the `Id` to a `Pid` for the given puppet type `P`.
-    ///
-    /// This function creates a new `Pid` instance using the current `Id` value
-    /// and the `Lifecycle` implementation of the puppet type `P`.
-    ///
-    /// # Panics
-    ///
-    /// This function does not panic.
-    #[must_use]
-    pub fn to_pid<P>(&self) -> Pid
-    where
-        P: Lifecycle,
-    {
-        Pid::new::<P>()
-    }
 }
 
 impl fmt::Display for Id {
@@ -200,5 +184,88 @@ impl std::hash::Hash for Pid {
 impl From<Pid> for String {
     fn from(value: Pid) -> Self {
         value.name()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::prelude::*;
+
+    use super::*;
+
+    #[derive(Clone)]
+    struct FirstPuppet;
+
+    impl Lifecycle for FirstPuppet {
+        type Supervision = OneToOne;
+    }
+
+    #[derive(Clone)]
+    struct SecondPuppet;
+
+    impl Lifecycle for SecondPuppet {
+        type Supervision = OneToOne;
+    }
+
+    #[test]
+    fn test_id_new() {
+        let id1 = Id::new::<i32>();
+        let id2 = Id::new::<String>();
+        assert_ne!(id1, id2);
+
+        let id3 = Id::new::<i32>();
+        assert_eq!(id1, id3);
+    }
+
+    #[test]
+    fn test_pid_name() {
+        let pid = Pid::new::<FirstPuppet>();
+        assert!(pid.name().ends_with("FirstPuppet"));
+    }
+
+    #[test]
+    fn test_pid_eq() {
+        let pid1 = Pid::new::<FirstPuppet>();
+        let pid2 = Pid::new::<FirstPuppet>();
+        assert_eq!(pid1, pid2);
+
+        let pid3 = Pid::new::<SecondPuppet>();
+        assert_ne!(pid1, pid3);
+    }
+
+    #[test]
+    fn test_pid_partial_ord() {
+        let pid1 = Pid::new::<FirstPuppet>();
+        let pid2 = Pid::new::<FirstPuppet>();
+        assert_eq!(pid1.partial_cmp(&pid2), Some(std::cmp::Ordering::Equal));
+
+        let pid3 = Pid::new::<SecondPuppet>();
+        assert_eq!(
+            pid1.partial_cmp(&pid3),
+            pid1.as_id().partial_cmp(&pid3.as_id())
+        );
+    }
+
+    #[test]
+    fn test_pid_hash() {
+        let pid1 = Pid::new::<FirstPuppet>();
+        let pid2 = Pid::new::<FirstPuppet>();
+        let mut hasher1 = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher2 = std::collections::hash_map::DefaultHasher::new();
+        pid1.hash(&mut hasher1);
+        pid2.hash(&mut hasher2);
+        assert_eq!(hasher1.finish(), hasher2.finish());
+
+        let pid3 = Pid::new::<SecondPuppet>();
+        let mut hasher3 = std::collections::hash_map::DefaultHasher::new();
+        pid3.hash(&mut hasher3);
+        assert_ne!(hasher1.finish(), hasher3.finish());
+    }
+
+    #[test]
+    fn test_pid_from_string() {
+        let pid = Pid::new::<FirstPuppet>();
+        let pid_string: String = pid.into();
+        assert!(pid_string.ends_with("FirstPuppet"));
     }
 }
