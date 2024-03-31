@@ -1066,7 +1066,6 @@ pub(crate) struct PuppetHandle<P>
 where
     P: Lifecycle,
 {
-    pub pid: Pid,
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
     pub(crate) message_rx: Mailbox<P>,
     pub(crate) command_rx: ServiceMailbox,
