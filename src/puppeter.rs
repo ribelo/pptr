@@ -1,29 +1,3 @@
-//! Puppeter is a flexible actor-based framework for building asynchronous systems in Rust.
-//! With a focus on type-driven API design, Puppeter provides a safe and convenient way to
-//! create and manage actors that communicate through message passing. Whether you're
-//! building a complex distributed system or a responsive user interface, Puppeter makes
-//! it easy to write efficient and maintainable asynchronous code.
-//!
-//! Then, you can start building your actor system:
-//!
-//! ```rust
-//! use puppeter::prelude::*;
-//!
-//! #[derive(Clone)]
-//! struct MyActor;
-//!
-//! #[async_trait]
-//! impl Lifecycle for MyActor {
-//!     type Supervision = OneForAll;
-//! }
-//!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let pptr = Puppeter::new();
-//!     let addr = pptr.spawn_owned::<MyActor>(PuppetBuilder::new(MyActor)).await?;
-//!     // Use the actor address to send messages
-//!     Ok(())
-//! }
 use std::{
     any::Any,
     hash::BuildHasherDefault,
