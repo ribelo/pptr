@@ -3,9 +3,7 @@ name: Code Coverage
 on:
   push:
     branches:
-      - main
-  pull_request:
-    types: [opened, reopened, synchronize]
+      - master
 
 jobs:
   coverage:
