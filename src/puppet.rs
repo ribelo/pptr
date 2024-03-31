@@ -1061,6 +1061,7 @@ where
 /// - `status_rx`: A `watch::Receiver` for receiving updates on the puppet's lifecycle status.
 /// - `message_rx`: A `Mailbox<P>` for receiving messages specific to the puppet type `P`.
 /// - `command_rx`: A `ServiceMailbox` for receiving general commands.
+#[allow(clippy::struct_field_names)]
 #[derive(Debug)]
 pub(crate) struct PuppetHandle<P>
 where

@@ -70,7 +70,7 @@ overflow-checks = false
 debug = false
 
 [lints.clippy]
-all = { level = "warn", priority = -1 }
+all = { level = "warn", priority = -2 }
 
 # restriction
 dbg_macro = "warn"
@@ -97,7 +97,7 @@ undocumented_unsafe_blocks = "warn"
 
 # I want to write the best Rust code so pedantic is enabled.
 # We should only disable rules globally if they are either false positives, chaotic, or does not make sense.
-pedantic = { level = "warn", priority = 0 }
+pedantic = { level = "warn", priority = -1 }
 
 # Allowed rules
 # pedantic
