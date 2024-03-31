@@ -968,14 +968,14 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```ignore
-    /// let address = pptr.spawn_owned::<Puppet>(builder).await?;
+    /// let address = pptr.spawn_self::<Puppet>(builder).await?;
     /// ```
     ///
     /// # Panics
     ///
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     #[allow(clippy::impl_trait_in_params)]
-    pub async fn spawn_owned<P>(
+    pub async fn spawn_self<P>(
         &self,
         builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
@@ -1812,7 +1812,7 @@ mod tests {
     async fn test_failed_recovery_after_failure() {
         let pptr = Puppeter::new();
         let res = pptr
-            .spawn_owned::<MasterActor>(PuppetBuilder::new(MasterActor::default()))
+            .spawn_self(PuppetBuilder::new(MasterActor::default()))
             .await;
         res.unwrap();
         let mut success = false;
