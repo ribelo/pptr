@@ -243,10 +243,14 @@ mod tests {
             .await
             .unwrap();
 
+        assert_eq!(address.get_status(), LifecycleStatus::Active);
+
         let (tx, rx) = std::sync::mpsc::channel();
         address.on_status_change(move |status| tx.send(status).unwrap());
 
         pptr.set_status_by_pid(address.pid, LifecycleStatus::Inactive);
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
         assert_eq!(rx.recv().unwrap(), LifecycleStatus::Inactive);
     }
 
