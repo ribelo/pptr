@@ -1,6 +1,3 @@
-use std::any::Any;
-
-// pub mod address;
 pub mod address;
 pub mod errors;
 pub mod executor;
@@ -9,8 +6,6 @@ pub mod pid;
 pub mod puppet;
 pub mod puppeter;
 pub mod supervision;
-
-pub type BoxedAny = Box<dyn Any + Send + Sync>;
 
 pub mod prelude {
     pub use crate::address::Address;

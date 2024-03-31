@@ -25,6 +25,7 @@
 //!     Ok(())
 //! }
 use std::{
+    any::Any,
     hash::BuildHasherDefault,
     num::NonZeroUsize,
     pin::Pin,
@@ -53,8 +54,9 @@ use crate::{
     puppet::{
         Context, Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, ResponseFor,
     },
-    BoxedAny,
 };
+
+pub type BoxedAny = Box<dyn Any + Send + Sync>;
 
 /// Type alias for a tuple containing a `watch::Sender<LifecycleStatus>` and `watch::Receiver<LifecycleStatus>`.
 ///
