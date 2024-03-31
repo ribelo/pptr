@@ -200,3 +200,169 @@ where
         write!(f, "Address({})", self.pid)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::{prelude::*, puppet::LifecycleStatus};
+    use async_trait::async_trait;
+    use tokio::time::Duration;
+
+    #[derive(Clone)]
+    struct TestAddressPuppet;
+
+    impl Lifecycle for TestAddressPuppet {
+        type Supervision = OneToOne;
+    }
+
+    #[tokio::test]
+    async fn test_get_status() {
+        let pptr = Puppeter::new();
+        let address = pptr
+            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
+            .await
+            .unwrap();
+        assert_eq!(address.get_status(), LifecycleStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_status() {
+        let pptr = Puppeter::new();
+        let address = pptr
+            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
+            .await
+            .unwrap();
+        let status_rx = address.subscribe_status();
+        assert_eq!(*status_rx.borrow(), LifecycleStatus::Active);
+    }
+
+    #[tokio::test]
+    async fn test_on_status_change() {
+        let pptr = Puppeter::new();
+        let address = pptr
+            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
+            .await
+            .unwrap();
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        address.on_status_change(move |status| tx.send(status).unwrap());
+
+        pptr.set_status_by_pid(address.pid, LifecycleStatus::Inactive);
+        assert_eq!(rx.recv().unwrap(), LifecycleStatus::Inactive);
+    }
+
+    #[tokio::test]
+    async fn test_send() {
+        #[derive(Debug)]
+        struct TestMessage;
+
+        #[async_trait]
+        impl Handler<TestMessage> for TestAddressPuppet {
+            type Response = ();
+            type Executor = SequentialExecutor;
+
+            async fn handle_message(
+                &mut self,
+                _: TestMessage,
+                _: &Context,
+            ) -> Result<(), PuppetError> {
+                Ok(())
+            }
+        }
+
+        let pptr = Puppeter::new();
+        let address = pptr
+            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
+            .await
+            .unwrap();
+        assert!(address.send(TestMessage).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ask() {
+        #[derive(Debug)]
+        struct TestMessage;
+
+        #[async_trait]
+        impl Handler<TestMessage> for TestAddressPuppet {
+            type Response = String;
+            type Executor = SequentialExecutor;
+
+            async fn handle_message(
+                &mut self,
+                _: TestMessage,
+                _: &Context,
+            ) -> Result<String, PuppetError> {
+                Ok("test".to_string())
+            }
+        }
+
+        let pptr = Puppeter::new();
+        let address = pptr
+            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
+            .await
+            .unwrap();
+        assert_eq!(address.ask(TestMessage).await.unwrap(), "test");
+    }
+
+    #[tokio::test]
+    async fn test_ask_with_timeout() {
+        #[derive(Debug)]
+        struct TestMessage;
+
+        #[async_trait]
+        impl Handler<TestMessage> for TestAddressPuppet {
+            type Response = ();
+            type Executor = SequentialExecutor;
+
+            async fn handle_message(
+                &mut self,
+                _: TestMessage,
+                _: &Context,
+            ) -> Result<(), PuppetError> {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                Ok(())
+            }
+        }
+
+        let pptr = Puppeter::new();
+        let address = pptr
+            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
+            .await
+            .unwrap();
+        assert!(address
+            .ask_with_timeout(TestMessage, Duration::from_secs(1))
+            .await
+            .is_err());
+        assert!(address
+            .ask_with_timeout(TestMessage, Duration::from_secs(4))
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_spawn() {
+        #[derive(Clone)]
+        struct MasterPuppet;
+        #[derive(Clone)]
+        struct ChildPuppet;
+
+        impl Lifecycle for MasterPuppet {
+            type Supervision = OneToOne;
+        }
+
+        impl Lifecycle for ChildPuppet {
+            type Supervision = OneToOne;
+        }
+
+        let pptr = Puppeter::new();
+        let master_address = pptr
+            .spawn::<MasterPuppet, MasterPuppet>(PuppetBuilder::new(MasterPuppet))
+            .await
+            .unwrap();
+        let child_address = master_address
+            .spawn::<ChildPuppet>(PuppetBuilder::new(ChildPuppet))
+            .await
+            .unwrap();
+        assert_eq!(child_address.get_status(), LifecycleStatus::Active);
+    }
+}
