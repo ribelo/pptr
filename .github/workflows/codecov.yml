@@ -1,23 +1,43 @@
-name: Upload Coverage Reports
+name: Code Coverage
 
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
-    branches:
-      - master
+    types: [opened, reopened, synchronize]
 
 jobs:
-  upload-coverage:
+  coverage:
+    name: Coverage
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
-        
+
+      - name: Install stable toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: llvm-tools-preview
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run tests and generate coverage reports
+        run: |
+          cargo test --all-features --no-fail-fast
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --out Xml
+
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v4.0.1
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: ribelo/pptr
+          files: ./cobertura.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: true
