@@ -35,7 +35,7 @@
 //! - **Lifecycle Management**: Puppeter offers built-in preimplemented methods for managing the
 //!   lifecycle of actors, including initialization, startup, shutdown, and state reset.
 //!
-//! - Resource Management: Puppeter provides a way to manage resources that can be shared among
+//! - **Resource Management**: Puppeter provides a way to manage resources that can be shared among
 //!   actors. In Rust, some libraries provide structures that are not easy and idiomatic to send
 //!   between actor, making it challenging to pass them through messages or include them as part of
 //!   an actor's state due to Rust's ownership rules. Examples include UI libraries where context and
@@ -49,9 +49,10 @@
 //! ## Getting Started
 //!
 //! ```rust
-//! use puppeter::prelude::*;
+//! use pptr::prelude::*;
+//! use async_trait::async_trait;
 //!
-//! #[derive(Default)]
+//! #[derive(Default, Clone)]
 //! struct PingActor;
 //!
 //! #[async_trait]
@@ -119,7 +120,7 @@
 //!     }
 //! }
 //!
-//! #[derive(Clone, Default)]
+//! #[derive(Default, Clone)]
 //! struct PongActor;
 //!
 //! // By default, similar to 'PingActor', the 'reset' method returns a default instance of 'PongActor'.

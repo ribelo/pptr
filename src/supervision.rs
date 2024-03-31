@@ -13,32 +13,6 @@
 //!
 //! The [`SupervisionStrategy`] trait defines the interface for implementing custom supervision
 //! strategies.
-//!
-//! # Examples
-//!
-//! Using a supervision strategy:
-//!
-//! ```
-//! use pptr::supervision::strategy::OneForAll;
-//! use pptr::supervision::SupervisionStrategy;
-//!
-//! # async fn handle_failure(post_office: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
-//! let result = OneForAll::handle_failure(post_office, master, puppet).await;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! Configuring retry behavior:
-//!
-//! ```
-//! use std::time::Duration;
-//! use pptr::supervision::RetryConfigBuilder;
-//!
-//! let config = RetryConfigBuilder::new()
-//!     .with_max_retries(3)
-//!     .within_duration(Duration::from_secs(30))
-//!     .with_time_between(Duration::from_secs(5))
-//!     .build();
 //! ```
 
 use std::{

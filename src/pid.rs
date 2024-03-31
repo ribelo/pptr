@@ -14,25 +14,17 @@
 //! # Examples
 //!
 //! ```
-//! use your_crate::Id;
+//! use pptr::prelude::*;
 //!
-//! struct MyType;
-//! let id = Id::new::<MyType>();
-//! println!("Unique ID: {}", id);
-//! ```
-//!
-//! ```
-//! use your_crate::{Id, Pid, Lifecycle};
-//!
+//! #[derive(Clone)]
 //! struct MyPuppet;
-//! impl Lifecycle for MyPuppet {}
+//! impl Lifecycle for MyPuppet {
+//!     type Supervision = OneForAll;
+//! }
 //!
 //! let pid = Pid::new::<MyPuppet>();
 //! println!("Puppet ID: {}", pid);
 //! println!("Puppet Name: {}", pid.name());
-//!
-//! let id = pid.to_id();
-//! println!("Converted back to Id: {}", id);
 //! ```
 
 use std::{
