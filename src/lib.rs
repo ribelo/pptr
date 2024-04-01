@@ -200,6 +200,7 @@ pub mod prelude {
     pub use crate::puppet::Handler;
     pub use crate::puppet::Lifecycle;
     pub use crate::puppet::Puppet;
+    pub use crate::puppet::PuppetBuilder;
     pub use crate::puppeter::Puppeter;
     pub use crate::supervision::strategy::*;
 }

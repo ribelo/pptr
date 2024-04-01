@@ -1,3 +1,5 @@
+use std::num::NonZeroUsize;
+
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -13,7 +15,7 @@ use crate::{
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
     puppeter::Puppeter,
-    supervision::{RetryConfig, SupervisionStrategy},
+    supervision::{RetryConfig, RetryConfigBuilder, SupervisionStrategy},
 };
 
 /// A trait that manages the entire lifecycle of puppets (actors) in an actor model.
@@ -28,7 +30,7 @@ use crate::{
 #[async_trait]
 pub trait Lifecycle: Send + Sync + Sized + Clone + Default + 'static {
     /// The supervision strategy used for managing the puppet's lifecycle.
-    type Supervision: SupervisionStrategy + Send + Sync;
+    type Supervision: SupervisionStrategy;
 
     /// Resets the puppet to its initial state.
     ///
@@ -485,7 +487,10 @@ impl Context {
     where
         P: Lifecycle,
     {
-        self.pptr.spawn_puppet_by_pid::<P>(self.pid).await
+        self.pptr
+            .puppet_builder::<P>()
+            .spawn_link_by_pid(self.pid)
+            .await
     }
 
     /// Reports an unrecoverable failure.
@@ -960,10 +965,11 @@ where
     ) -> Result<Self::Response, PuppetError>;
 }
 
-/// Represents a handle to a puppet of type `P`.
+/// A builder for creating and configuring a puppet.
 ///
-/// The `PuppetHandle` provides access to the puppet's lifecycle status, message receiver, and
-/// command receiver. It allows interacting with the puppet by sending messages and commands.
+/// The `PuppetBuilder` struct allows for the creation and configuration of a puppet instance.
+/// It provides methods to set various options such as the message buffer size, command buffer size,
+/// and retry configuration.
 ///
 /// The generic parameter `P` specifies the type of the puppet and must implement the `Lifecycle`
 /// trait.
@@ -971,9 +977,27 @@ where
 /// # Fields
 ///
 /// - `pid`: The process ID (`Pid`) of the puppet.
-/// - `status_rx`: A `watch::Receiver` for receiving updates on the puppet's lifecycle status.
-/// - `message_rx`: A `Mailbox<P>` for receiving messages specific to the puppet type `P`.
-/// - `command_rx`: A `ServiceMailbox` for receiving general commands.
+/// - `puppet`: An optional instance of the puppet of type `P`.
+/// - `messages_buffer_size`: The buffer size for the puppet's message mailbox, represented as a `NonZeroUsize`.
+/// - `commands_buffer_size`: The buffer size for the puppet's command mailbox, represented as a `NonZeroUsize`.
+/// - `retry_config`: An optional `RetryConfig` specifying the retry behavior for the puppet.
+/// - `pptr`: An optional reference to the `Puppeter` instance associated with the puppet.
+///
+/// # Example
+///
+/// ```rust
+/// use pptr::prelude::*;
+///
+/// #[derive(Debug, Default, Clone)]
+/// struct Puppet;
+///
+/// impl Lifecycle for Puppet {
+///     type Supervision = OneForAll;
+/// }
+///
+/// let pptr = Puppeter::new();
+/// let builder = PuppetBuilder::<Puppet>::new(pptr);
+/// ```
 #[allow(clippy::struct_field_names)]
 #[derive(Debug)]
 pub(crate) struct PuppetHandle<P>
@@ -983,6 +1007,140 @@ where
     pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
     pub(crate) message_rx: Mailbox<P>,
     pub(crate) command_rx: ServiceMailbox,
+}
+
+/// Creates a new `PuppetBuilder` with the provided `Puppeter` instance.
+///
+/// This method initializes a new `PuppetBuilder` instance with default values for the
+/// message buffer size, command buffer size, and retry configuration.
+///
+/// # Arguments
+///
+/// - `pptr` - The `Puppeter` instance to associate with the puppet.
+///
+/// # Returns
+///
+/// A new `PuppetBuilder` instance with default configuration.
+///
+/// # Example
+///
+/// ```rust
+/// use pptr::prelude::*;
+///
+/// #[derive(Debug, Default, Clone)]
+/// struct Puppet;
+///
+/// impl Lifecycle for Puppet {
+///     type Supervision = OneForAll;
+/// }
+///
+/// let pptr = Puppeter::new();
+/// let builder = PuppetBuilder::<Puppet>::new(pptr);
+/// ```
+///
+/// # Safety
+///
+/// This method uses `unsafe` to create `NonZeroUsize` values for the message and command buffer sizes.
+/// It is safe because the values are known to be non-zero at compile time.
+#[derive(Debug)]
+pub struct PuppetBuilder<P>
+where
+    P: Lifecycle,
+{
+    pub pid: Pid,
+    pub puppet: Option<P>,
+    pub messages_buffer_size: NonZeroUsize,
+    pub commands_buffer_size: NonZeroUsize,
+    pub retry_config: Option<RetryConfig>,
+    pub pptr: Option<Puppeter>,
+}
+
+impl<P> PuppetBuilder<P>
+where
+    P: Lifecycle,
+{
+    /// Creates a new `PuppetBuilder` with the provided puppet state.
+    ///
+    /// This method initializes a new `PuppetBuilder` instance with default values for the
+    /// message buffer size, command buffer size, and retry configuration.
+    #[must_use]
+    pub fn new(pptr: Puppeter) -> Self {
+        Self {
+            pid: Pid::new::<P>(),
+            puppet: Some(P::default()),
+            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
+            messages_buffer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
+            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
+            commands_buffer_size: unsafe { NonZeroUsize::new_unchecked(16) },
+            retry_config: Some(RetryConfigBuilder::default().build()),
+            pptr: Some(pptr),
+        }
+    }
+
+    /// Sets the message buffer size for the puppet.
+    ///
+    /// This method allows configuring the size of the message buffer used by the puppet.
+    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
+    /// the updated `PuppetBuilder` instance.
+    #[must_use]
+    pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
+        self.messages_buffer_size = size;
+        self
+    }
+
+    /// Sets the command buffer size for the puppet.
+    ///
+    /// This method allows configuring the size of the command buffer used by the puppet.
+    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
+    /// the updated `PuppetBuilder` instance.
+    #[must_use]
+    pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
+        self.commands_buffer_size = size;
+        self
+    }
+
+    /// Spawns an independent puppet (actor) on the `pptr` runtime.
+    ///
+    /// This method spawns a puppet without a manager, making it independent. It takes a reference
+    /// to the `Puppeter` runtime and returns a `Result` containing the `Address` of the spawned
+    /// puppet on success, or a `PuppetError` on failure.
+    pub async fn spawn(mut self) -> Result<Address<P>, PuppetError>
+    where
+        P: Lifecycle,
+    {
+        let pptr = self.pptr.take().unwrap();
+        pptr.spawn_puppet_by_pid(self, Pid::new::<P>()).await
+    }
+
+    /// Spawns a puppet (actor) with a manager on the `pptr` runtime.
+    ///
+    /// This method spawns a puppet `P` with a manager `M`. It takes a reference to the `Puppeter`
+    /// runtime and returns a `Result` containing the `Address` of the spawned puppet on success,
+    /// or a `PuppetError` on failure.
+    pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
+    where
+        P: Lifecycle,
+        M: Lifecycle,
+    {
+        let pptr = self.pptr.take().unwrap();
+        pptr.spawn_puppet_by_pid(self, Pid::new::<M>()).await
+    }
+
+    /// Spawns a puppet (actor) with a specified master PID on the `pptr` runtime.
+    ///
+    /// This method spawns a puppet `P` with the provided `master_pid`. It takes ownership of the
+    /// `Puppeter` runtime and returns a `Result` containing the `Address` of the spawned puppet on
+    /// success, or a `PuppetError` on failure.
+    pub(crate) async fn spawn_link_by_pid(
+        mut self,
+        master_pid: Pid,
+    ) -> Result<Address<P>, PuppetError>
+    where
+        P: Lifecycle,
+    {
+        let pptr = self.pptr.take().unwrap();
+        pptr.spawn_puppet_by_pid(self, master_pid).await
+    }
 }
 
 #[allow(dead_code, unused_imports)]

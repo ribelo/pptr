@@ -24,8 +24,9 @@ use crate::{
     },
     pid::{Id, Pid},
     prelude::CriticalError,
-    puppet::{Context, Handler, Lifecycle, LifecycleStatus, PuppetHandle, ResponseFor},
-    supervision::RetryConfigBuilder,
+    puppet::{
+        Context, Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, ResponseFor,
+    },
 };
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
@@ -922,11 +923,12 @@ impl Puppeter {
     #[allow(clippy::impl_trait_in_params)]
     pub async fn spawn<P, M>(&self) -> Result<Address<P>, PuppetError>
     where
-        M: Lifecycle,
         P: Lifecycle,
+        M: Lifecycle,
     {
-        let master = Pid::new::<M>();
-        self.spawn_puppet_by_pid::<P>(master).await
+        self.puppet_builder::<P>()
+            .spawn_link_by_pid(Pid::new::<M>())
+            .await
     }
 
     /// Spawns a new independent puppet and links it to itself.
@@ -979,6 +981,7 @@ impl Puppeter {
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) async fn spawn_puppet_by_pid<P>(
         &self,
+        mut builder: PuppetBuilder<P>,
         master_pid: Pid,
     ) -> Result<Address<P>, PuppetError>
     where
@@ -992,8 +995,10 @@ impl Puppeter {
         let mut puppet = P::default();
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
-        let (message_tx, message_rx) = mpsc::channel::<Box<dyn Envelope<P>>>(64);
-        let (command_tx, command_rx) = mpsc::channel::<ServicePacket>(16);
+        let (message_tx, message_rx) =
+            mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_buffer_size.get());
+        let (command_tx, command_rx) =
+            mpsc::channel::<ServicePacket>(builder.commands_buffer_size.get());
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
         self.register_puppet_by_pid::<P>(
@@ -1003,7 +1008,7 @@ impl Puppeter {
             status_tx,
             status_rx.clone(),
         )?;
-        let retry_config = RetryConfigBuilder::default().build();
+        let retry_config = builder.retry_config.take().unwrap_or_default();
 
         let puppeter = Context {
             pid,
@@ -1029,6 +1034,38 @@ impl Puppeter {
 
         tokio::spawn(run_puppet_loop(puppet, puppeter, handle));
         Ok(address)
+    }
+
+    /// Creates a new `PuppetBuilder` for the specified puppet type `P`.
+    ///
+    /// This method returns a `PuppetBuilder` instance associated with the current `Puppeter`.
+    /// The generic parameter `P` specifies the type of the puppet and must implement the `Lifecycle`
+    /// trait.
+    ///
+    /// # Returns
+    ///
+    /// A new `PuppetBuilder` instance for the specified puppet type `P`.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use pptr::prelude::*;
+    ///
+    /// #[derive(Debug, Default, Clone)]
+    /// struct Puppet;
+    ///
+    /// impl Lifecycle for Puppet {
+    ///     type Supervision = OneForAll;
+    /// }
+    ///
+    /// let pptr = Puppeter::new();
+    /// let builder = pptr.puppet_builder::<Puppet>();
+    #[must_use]
+    pub fn puppet_builder<P>(&self) -> PuppetBuilder<P>
+    where
+        P: Lifecycle,
+    {
+        PuppetBuilder::new(self.clone())
     }
 
     /// Adds a new resource to the resource collection.
