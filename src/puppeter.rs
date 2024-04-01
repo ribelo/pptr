@@ -25,9 +25,8 @@ use crate::{
     },
     pid::{Id, Pid},
     prelude::CriticalError,
-    puppet::{
-        Context, Handler, Lifecycle, LifecycleStatus, PuppetBuilder, PuppetHandle, ResponseFor,
-    },
+    puppet::{Context, Handler, Lifecycle, LifecycleStatus, PuppetHandle, ResponseFor},
+    supervision::RetryConfigBuilder,
 };
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
@@ -916,16 +915,13 @@ impl Puppeter {
     ///
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     #[allow(clippy::impl_trait_in_params)]
-    pub async fn spawn<M, P>(
-        &self,
-        builder: impl Into<PuppetBuilder<P>> + Send,
-    ) -> Result<Address<P>, PuppetError>
+    pub async fn spawn<P, M>(&self) -> Result<Address<P>, PuppetError>
     where
         M: Lifecycle,
         P: Lifecycle,
     {
         let master = Pid::new::<M>();
-        self.spawn_puppet_by_pid(master, builder).await
+        self.spawn_puppet_by_pid::<P>(master).await
     }
 
     /// Spawns a new independent puppet and links it to itself.
@@ -949,18 +945,14 @@ impl Puppeter {
     ///
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     #[allow(clippy::impl_trait_in_params)]
-    pub async fn spawn_self<P>(
-        &self,
-        builder: impl Into<PuppetBuilder<P>> + Send,
-    ) -> Result<Address<P>, PuppetError>
+    pub async fn spawn_self<P>(&self) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
     {
-        let master = Pid::new::<P>();
-        self.spawn_puppet_by_pid(master, builder).await
+        self.spawn::<P, P>().await
     }
 
-    /// Spawns a new puppet and links it to the specified master `Pid`.
+    /// Spawns a new puppet and links it to the specified master.
     ///
     /// This method creates a new puppet using the provided `PuppetBuilder` and links it to
     /// the specified master `Pid`. It returns an `Address<P>` for the newly spawned puppet.
@@ -974,7 +966,7 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```ignore
-    /// let address = pptr.spawn_puppet_by_pid::<Puppet>(master_pid, builder).await?;
+    /// let address = pptr.spawn::<Master, Puppet>(builder).await?;
     /// ```
     ///
     /// # Panics
@@ -983,7 +975,6 @@ impl Puppeter {
     pub(crate) async fn spawn_puppet_by_pid<P>(
         &self,
         master_pid: Pid,
-        builder: impl Into<PuppetBuilder<P>> + Send,
     ) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
@@ -993,19 +984,11 @@ impl Puppeter {
             return Err(PuppetDoesNotExistError::new(master_pid).into());
         }
 
-        let mut builder = builder.into();
-        let Some(mut puppet) = builder.puppet.take() else {
-            return Err(PuppetError::critical(
-                puppet_pid,
-                "PuppetBuilder has no puppet",
-            ));
-        };
+        let mut puppet = P::default();
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
-        let (message_tx, message_rx) =
-            mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_buffer_size.into());
-        let (command_tx, command_rx) =
-            mpsc::channel::<ServicePacket>(builder.commands_buffer_size.into());
+        let (message_tx, message_rx) = mpsc::channel::<Box<dyn Envelope<P>>>(64);
+        let (command_tx, command_rx) = mpsc::channel::<ServicePacket>(16);
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
         self.register_puppet_by_pid::<P>(
@@ -1015,12 +998,7 @@ impl Puppeter {
             status_tx,
             status_rx.clone(),
         )?;
-        let Some(retry_config) = builder.retry_config.take() else {
-            return Err(PuppetError::critical(
-                puppet_pid,
-                "PuppetBuilder has no RetryConfig",
-            ));
-        };
+        let retry_config = RetryConfigBuilder::default().build();
 
         let puppeter = Context {
             pid,
@@ -1641,59 +1619,58 @@ mod tests {
     #[tokio::test]
     async fn test_spawn() {
         let pptr = Puppeter::new();
-        let res = pptr
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
-            .await;
+        let res = pptr.spawn::<PuppetActor, PuppetActor>().await;
         res.unwrap();
-        let res = pptr
-            .spawn::<MasterActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
-            .await;
+        let res = pptr.spawn::<PuppetActor, MasterActor>().await;
         res.unwrap_err();
     }
 
     #[tokio::test]
     async fn test_send() {
         let pptr = Puppeter::new();
-        let res = pptr
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
-            .await;
+
+        let res = pptr.spawn::<PuppetActor, PuppetActor>().await;
         res.unwrap();
 
         let res = pptr.send::<PuppetActor, PuppetMessage>(PuppetMessage).await;
         res.unwrap();
 
+        // Send without creating the puppet
         let res = pptr.send::<MasterActor, MasterMessage>(MasterMessage).await;
-        assert!(res.is_err());
+        res.unwrap();
     }
 
     #[tokio::test]
     async fn test_ask() {
         let pptr = Puppeter::new();
-        let res = pptr
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
-            .await;
+
+        let res = pptr.spawn_self::<PuppetActor>().await;
         res.unwrap();
 
-        let res = pptr.ask::<PuppetActor, PuppetMessage>(PuppetMessage).await;
+        let res = pptr.ask::<PuppetActor, _>(PuppetMessage).await;
         res.unwrap();
 
-        let res = pptr.ask::<MasterActor, MasterMessage>(MasterMessage).await;
-        assert!(res.is_err());
+        // Send without creating the puppet
+        let res = pptr.ask::<MasterActor, _>(MasterMessage).await;
+        res.unwrap();
     }
 
     #[tokio::test]
     async fn test_ask_with_timeout() {
         let pptr = Puppeter::new();
+
+        let res = pptr.spawn_self::<PuppetActor>().await;
+        assert!(res.is_ok());
+
         let res = pptr
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
+            .ask_with_timeout::<PuppetActor, _>(PuppetMessage, Duration::from_secs(1))
             .await;
         assert!(res.is_ok());
+
         let res = pptr
-            .ask_with_timeout::<PuppetActor, PuppetMessage>(PuppetMessage, Duration::from_secs(1))
+            .ask_with_timeout::<MasterActor, _>(MasterMessage, Duration::from_secs(1))
             .await;
         assert!(res.is_ok());
-        let res = pptr.send::<MasterActor, MasterMessage>(MasterMessage).await;
-        assert!(res.is_err());
     }
 
     #[tokio::test]
@@ -1751,10 +1728,7 @@ mod tests {
         }
 
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<CounterPuppet, CounterPuppet>(PuppetBuilder::new(CounterPuppet::default()))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<CounterPuppet>().await.unwrap();
         address.send(IncrementCounter).await.unwrap();
         // wait 1 second for the puppet to finish
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1763,11 +1737,10 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(unused_assignments)]
     async fn test_successful_recovery_after_failure() {
         let pptr = Puppeter::new();
-        let res = pptr
-            .spawn::<PuppetActor, PuppetActor>(PuppetBuilder::new(PuppetActor::default()))
-            .await;
+        let res = pptr.spawn_self::<PuppetActor>().await;
         res.unwrap();
         let mut success = false;
 
@@ -1782,11 +1755,10 @@ mod tests {
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     #[tokio::test]
+    #[allow(unused_assignments)]
     async fn test_failed_recovery_after_failure() {
         let pptr = Puppeter::new();
-        let res = pptr
-            .spawn_self(PuppetBuilder::new(MasterActor::default()))
-            .await;
+        let res = pptr.spawn_self::<MasterActor>().await;
         res.unwrap();
         let mut success = false;
 

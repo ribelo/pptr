@@ -161,11 +161,11 @@
 //!
 //!     // Spawn a 'PingActor' and specify 'PingActor' as its own supervisor.
 //!     // This means that 'PingActor' will manage itself.
-//!     pptr.spawn::<PingActor, PingActor>(PuppetBuilder::new(PingActor::default())).await?;
+//!     pptr.spawn::<PingActor, PingActor>().await?;
 //!
 //!     // Spawn a 'PongActor' using the shorter 'spawn_self' method.
 //!     // This is equivalent to specifying 'PongActor' as its own supervisor.
-//!     pptr.spawn_self(PuppetBuilder::new(PongActor::default())).await?;
+//!     pptr.spawn_self::<PongActor>().await?;
 //!
 //!     // Send an initial 'Ping' message to 'PingActor' with a counter value of 0.
 //!     // This starts the ping-pong game between 'PingActor' and 'PongActor'.
@@ -200,7 +200,6 @@ pub mod prelude {
     pub use crate::puppet::Handler;
     pub use crate::puppet::Lifecycle;
     pub use crate::puppet::Puppet;
-    pub use crate::puppet::PuppetBuilder;
     pub use crate::puppeter::Puppeter;
     pub use crate::supervision::strategy::*;
 }

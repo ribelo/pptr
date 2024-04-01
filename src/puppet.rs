@@ -1,5 +1,3 @@
-use std::num::NonZeroUsize;
-
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use tokio::sync::watch;
@@ -15,7 +13,7 @@ use crate::{
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
     puppeter::Puppeter,
-    supervision::{RetryConfig, RetryConfigBuilder, SupervisionStrategy},
+    supervision::{RetryConfig, SupervisionStrategy},
 };
 
 /// A trait that manages the entire lifecycle of puppets (actors) in an actor model.
@@ -112,90 +110,6 @@ pub struct Context {
     pub pid: Pid,
     pub(crate) pptr: Puppeter,
     pub(crate) retry_config: RetryConfig,
-}
-
-/// A builder for creating and configuring a puppet.
-///
-/// The `PuppetBuilder` struct allows for the creation and configuration of a puppet instance.
-/// It provides methods to set various options such as the message buffer size, command buffer size,
-/// and retry configuration.
-pub struct PuppetBuilder<P>
-where
-    P: Lifecycle,
-{
-    pub pid: Pid,
-    pub puppet: Option<P>,
-    pub messages_buffer_size: NonZeroUsize,
-    pub commands_buffer_size: NonZeroUsize,
-    pub retry_config: Option<RetryConfig>,
-}
-
-impl<P> PuppetBuilder<P>
-where
-    P: Lifecycle,
-{
-    /// Creates a new `PuppetBuilder` with the provided puppet state.
-    ///
-    /// This method initializes a new `PuppetBuilder` instance with default values for the
-    /// message buffer size, command buffer size, and retry configuration.
-    pub fn new(state: P) -> Self {
-        Self {
-            pid: Pid::new::<P>(),
-            puppet: Some(state),
-            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
-            messages_buffer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
-            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
-            commands_buffer_size: unsafe { NonZeroUsize::new_unchecked(16) },
-            retry_config: Some(RetryConfigBuilder::default().build()),
-        }
-    }
-
-    /// Sets the message buffer size for the puppet.
-    ///
-    /// This method allows configuring the size of the message buffer used by the puppet.
-    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
-    /// the updated `PuppetBuilder` instance.
-    #[must_use]
-    pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
-        self.messages_buffer_size = size;
-        self
-    }
-
-    /// Sets the command buffer size for the puppet.
-    ///
-    /// This method allows configuring the size of the command buffer used by the puppet.
-    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
-    /// the updated `PuppetBuilder` instance.
-    #[must_use]
-    pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
-        self.commands_buffer_size = size;
-        self
-    }
-
-    /// Spawns an independent puppet (actor) on the `pptr` runtime.
-    ///
-    /// This method spawns a puppet without a manager, making it independent. It takes a reference
-    /// to the `Puppeter` runtime and returns a `Result` containing the `Address` of the spawned
-    /// puppet on success, or a `PuppetError` on failure.
-    pub async fn spawn(self, pptr: &Puppeter) -> Result<Address<P>, PuppetError>
-    where
-        P: Lifecycle,
-    {
-        pptr.spawn::<P, P>(self).await
-    }
-
-    /// Spawns a puppet (actor) with a manager on the `pptr` runtime.
-    ///
-    /// This method spawns a puppet `P` with a manager `M`. It takes a reference to the `Puppeter`
-    /// runtime and returns a `Result` containing the `Address` of the spawned puppet on success,
-    /// or a `PuppetError` on failure.
-    pub async fn spawn_link<M>(self, pptr: &Puppeter) -> Result<Address<P>, PuppetError>
-    where
-        P: Lifecycle,
-        M: Lifecycle,
-    {
-        pptr.spawn::<M, P>(self).await
-    }
 }
 
 impl Context {
@@ -567,12 +481,11 @@ impl Context {
     /// # Errors
     ///
     /// Returns a `PuppetError` if the puppet fails to spawn or initialize.
-    pub async fn spawn<P, B>(&self, builder: B) -> Result<Address<P>, PuppetError>
+    pub async fn spawn<P>(&self) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
-        B: Into<PuppetBuilder<P>> + Send,
     {
-        self.pptr.spawn_puppet_by_pid::<P>(self.pid, builder).await
+        self.pptr.spawn_puppet_by_pid::<P>(self.pid).await
     }
 
     /// Reports an unrecoverable failure.

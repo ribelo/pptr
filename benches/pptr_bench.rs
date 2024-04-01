@@ -4,7 +4,7 @@ use pptr::{
     errors::PuppetError,
     executor::{ConcurrentExecutor, SequentialExecutor},
     message::Message,
-    puppet::{Handler, Lifecycle, PuppetBuilder},
+    puppet::{Handler, Lifecycle},
     supervision::strategy::OneForAll,
 };
 

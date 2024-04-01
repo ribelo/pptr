@@ -6,7 +6,7 @@ use crate::{
     errors::{PostmanError, PuppetError},
     message::{Message, Postman},
     pid::Pid,
-    puppet::{Handler, Lifecycle, LifecycleStatus, PuppetBuilder, ResponseFor},
+    puppet::{Handler, Lifecycle, LifecycleStatus, ResponseFor},
     puppeter::Puppeter,
 };
 
@@ -181,14 +181,11 @@ where
     /// let address = address.spawn::<Puppet>(builder).await?;
     /// ```
     #[allow(clippy::impl_trait_in_params)]
-    pub async fn spawn<P>(
-        &self,
-        builder: impl Into<PuppetBuilder<P>> + Send,
-    ) -> Result<Address<P>, PuppetError>
+    pub async fn spawn<P>(&self) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
     {
-        self.pptr.spawn::<S, P>(builder).await
+        self.pptr.spawn::<P, S>().await
     }
 }
 
@@ -217,20 +214,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_status() {
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<TestAddressPuppet>().await.unwrap();
         assert_eq!(address.get_status(), LifecycleStatus::Active);
     }
 
     #[tokio::test]
     async fn test_subscribe_status() {
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<TestAddressPuppet>().await.unwrap();
         let status_rx = address.subscribe_status();
         assert_eq!(*status_rx.borrow(), LifecycleStatus::Active);
     }
@@ -238,10 +229,7 @@ mod tests {
     #[tokio::test]
     async fn test_on_status_change() {
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<TestAddressPuppet>().await.unwrap();
 
         assert_eq!(address.get_status(), LifecycleStatus::Active);
 
@@ -274,10 +262,7 @@ mod tests {
         }
 
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<TestAddressPuppet>().await.unwrap();
         assert!(address.send(TestMessage).await.is_ok());
     }
 
@@ -301,10 +286,7 @@ mod tests {
         }
 
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<TestAddressPuppet>().await.unwrap();
         assert_eq!(address.ask(TestMessage).await.unwrap(), "test");
     }
 
@@ -329,10 +311,7 @@ mod tests {
         }
 
         let pptr = Puppeter::new();
-        let address = pptr
-            .spawn::<TestAddressPuppet, TestAddressPuppet>(PuppetBuilder::new(TestAddressPuppet))
-            .await
-            .unwrap();
+        let address = pptr.spawn_self::<TestAddressPuppet>().await.unwrap();
         assert!(address
             .ask_with_timeout(TestMessage, Duration::from_secs(1))
             .await
@@ -359,14 +338,8 @@ mod tests {
         }
 
         let pptr = Puppeter::new();
-        let master_address = pptr
-            .spawn::<MasterPuppet, MasterPuppet>(PuppetBuilder::new(MasterPuppet))
-            .await
-            .unwrap();
-        let child_address = master_address
-            .spawn::<ChildPuppet>(PuppetBuilder::new(ChildPuppet))
-            .await
-            .unwrap();
+        let master_address = pptr.spawn_self::<MasterPuppet>().await.unwrap();
+        let child_address = master_address.spawn::<ChildPuppet>().await.unwrap();
         assert_eq!(child_address.get_status(), LifecycleStatus::Active);
     }
 }
