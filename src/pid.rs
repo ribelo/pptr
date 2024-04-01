@@ -16,13 +16,13 @@
 //! ```
 //! use pptr::prelude::*;
 //!
-//! #[derive(Clone)]
-//! struct MyPuppet;
-//! impl Lifecycle for MyPuppet {
+//! # #[derive(Debug, Clone, Default)]
+//! struct Puppet;
+//! impl Lifecycle for Puppet {
 //!     type Supervision = OneForAll;
 //! }
 //!
-//! let pid = Pid::new::<MyPuppet>();
+//! let pid = Pid::new::<Puppet>();
 //! println!("Puppet ID: {}", pid);
 //! println!("Puppet Name: {}", pid.name());
 //! ```
@@ -193,14 +193,14 @@ mod tests {
 
     use super::*;
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     struct FirstPuppet;
 
     impl Lifecycle for FirstPuppet {
         type Supervision = OneToOne;
     }
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     struct SecondPuppet;
 
     impl Lifecycle for SecondPuppet {

@@ -26,7 +26,7 @@ use crate::{
 /// Implementors of this trait must be `Send`, `Sync`, `Sized`, `Clone`, and `'static`.
 #[allow(unused_variables)]
 #[async_trait]
-pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
+pub trait Lifecycle: Send + Sync + Sized + Clone + Default + 'static {
     /// The supervision strategy used for managing the puppet's lifecycle.
     type Supervision: SupervisionStrategy + Send + Sync;
 
@@ -38,7 +38,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation clones the current instance of the puppet.
     async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
-        Ok(self.clone())
+        Ok(Self::default())
     }
 
     /// Initializes the puppet.

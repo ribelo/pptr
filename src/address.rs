@@ -204,7 +204,7 @@ mod tests {
     use async_trait::async_trait;
     use tokio::time::Duration;
 
-    #[derive(Clone)]
+    #[derive(Clone, Default)]
     struct TestAddressPuppet;
 
     impl Lifecycle for TestAddressPuppet {
@@ -324,9 +324,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn() {
-        #[derive(Clone)]
+        #[derive(Clone, Default)]
         struct MasterPuppet;
-        #[derive(Clone)]
+        #[derive(Clone, Default)]
         struct ChildPuppet;
 
         impl Lifecycle for MasterPuppet {

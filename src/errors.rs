@@ -52,12 +52,12 @@ impl PuppetDoesNotExistError {
     /// ```
     /// # use pptr::pid::Pid;
     /// # use pptr::errors::PuppetDoesNotExistError;
-    /// # #[derive(Debug, Clone)]
-    /// # struct MyPuppet;
-    /// # impl pptr::puppet::Lifecycle for MyPuppet {
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Puppet;
+    /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let pid = Pid::new::<MyPuppet>();
+    /// let pid = Pid::new::<Puppet>();
     /// let err = PuppetDoesNotExistError::new(pid);
     /// ```
     ///
@@ -78,12 +78,12 @@ impl PuppetDoesNotExistError {
     ///
     /// ```
     /// # use pptr::errors::PuppetDoesNotExistError;
-    /// # #[derive(Debug, Clone)]
-    /// # struct MyPuppet;
-    /// # impl pptr::puppet::Lifecycle for MyPuppet {
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Puppet;
+    /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let err = PuppetDoesNotExistError::from_type::<MyPuppet>();
+    /// let err = PuppetDoesNotExistError::from_type::<Puppet>();
     /// ```
     ///
     /// # Panics
@@ -163,12 +163,12 @@ impl PuppetAlreadyExist {
     /// ```
     /// # use pptr::pid::Pid;
     /// # use pptr::errors::PuppetAlreadyExist;
-    /// # #[derive(Debug, Clone)]
-    /// # struct MyPuppet;
-    /// # impl pptr::puppet::Lifecycle for MyPuppet {
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Puppet;
+    /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let pid = Pid::new::<MyPuppet>();
+    /// let pid = Pid::new::<Puppet>();
     /// let err = PuppetAlreadyExist::new(pid);
     /// ```
     ///
@@ -189,12 +189,12 @@ impl PuppetAlreadyExist {
     ///
     /// ```
     /// # use pptr::errors::PuppetAlreadyExist;
-    /// # #[derive(Debug, Clone)]
-    /// # struct MyPuppet;
-    /// # impl pptr::puppet::Lifecycle for MyPuppet {
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Puppet;
+    /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let err = PuppetAlreadyExist::from_type::<MyPuppet>();
+    /// let err = PuppetAlreadyExist::from_type::<Puppet>();
     /// ```
     ///
     /// # Panics
@@ -220,13 +220,13 @@ impl PuppetAlreadyExist {
 /// # use pptr::errors::PermissionDeniedError;
 /// # use pptr::pid::Pid;
 /// #
-/// # #[derive(Debug, Clone)]
+/// # #[derive(Debug, Clone, Default)]
 /// # struct Puppet;
 /// # impl pptr::puppet::Lifecycle for Puppet {
 /// #     type Supervision = pptr::supervision::strategy::OneToOne;
 /// # }
 /// #
-/// # #[derive(Debug, Clone)]
+/// # #[derive(Debug, Clone, Default)]
 /// # struct Master;
 /// # impl pptr::puppet::Lifecycle for Master {
 /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -268,13 +268,13 @@ impl PermissionDeniedError {
     /// # use pptr::errors::PermissionDeniedError;
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
     /// # impl pptr::puppet::Lifecycle for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -302,13 +302,13 @@ impl PermissionDeniedError {
     /// # use pptr::errors::PermissionDeniedError;
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
     /// # impl pptr::puppet::Lifecycle for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -322,10 +322,10 @@ impl PermissionDeniedError {
     ///
     /// This function does not panic.
     #[must_use]
-    pub fn from_type<M, P>() -> Self
+    pub fn from_type<P, M>() -> Self
     where
-        M: Lifecycle,
         P: Lifecycle,
+        M: Lifecycle,
     {
         Self::new(Pid::new::<M>(), Pid::new::<P>())
     }
@@ -338,13 +338,13 @@ impl PermissionDeniedError {
     /// # use pptr::errors::PermissionDeniedError;
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
     /// # impl pptr::puppet::Lifecycle for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -372,13 +372,13 @@ impl PermissionDeniedError {
     /// # use pptr::errors::PermissionDeniedError;
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
     /// # impl pptr::puppet::Lifecycle for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -433,7 +433,7 @@ impl PuppetCannotHandleMessage {
     /// # use pptr::pid::Pid;
     /// # use pptr::puppet::LifecycleStatus;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -459,7 +459,7 @@ impl PuppetCannotHandleMessage {
     /// # use pptr::pid::Pid;
     /// # use pptr::puppet::LifecycleStatus;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -513,7 +513,7 @@ impl CriticalError {
     /// # use pptr::errors::CriticalError;
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -563,7 +563,7 @@ impl PuppetError {
     /// # use pptr::errors::{PuppetError, NonCriticalError};
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
@@ -595,7 +595,7 @@ impl PuppetError {
     /// # use pptr::errors::{PuppetError, CriticalError};
     /// # use pptr::pid::Pid;
     /// #
-    /// # #[derive(Debug, Clone)]
+    /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
     /// # impl pptr::puppet::Lifecycle for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;

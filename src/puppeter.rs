@@ -387,14 +387,14 @@ impl Puppeter {
     ///
     /// ```
     /// # use pptr::prelude::*;
-    /// # #[derive(Clone)]
-    /// # struct MyPuppet;
-    /// # impl Lifecycle for MyPuppet {
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Puppet;
+    /// # impl Lifecycle for Puppet {
     /// #     type Supervision = OneForAll;
     /// # }
     /// let pptr = Puppeter::new();
-    /// if let Some(receiver) = pptr.subscribe_puppet_status::<MyPuppet>() {
-    ///     // Use the receiver to get status updates for MyPuppet
+    /// if let Some(receiver) = pptr.subscribe_puppet_status::<Puppet>() {
+    ///     // Use the receiver to get status updates for Puppet
     ///     let status = receiver.borrow();
     ///     println!("Current status: {:?}", status);
     /// }
@@ -437,13 +437,13 @@ impl Puppeter {
     ///
     /// ```
     /// # use pptr::prelude::*;
-    /// # #[derive(Clone)]
-    /// # struct MyPuppet;
-    /// # impl Lifecycle for MyPuppet {
+    /// # #[derive(Debug, Clone, Default)]
+    /// # struct Puppet;
+    /// # impl Lifecycle for Puppet {
     /// #     type Supervision = OneForAll;
     /// # }
     /// # let pptr = Puppeter::new();
-    /// if let Some(status) = pptr.get_puppet_status::<MyPuppet>() {
+    /// if let Some(status) = pptr.get_puppet_status::<Puppet>() {
     ///     println!("Current status: {:?}", status);
     /// }
     /// ```
@@ -527,11 +527,11 @@ impl Puppeter {
     /// # Panics
     ///
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
-    pub fn set_puppet_master<O, M, P>(&self) -> Result<(), PuppetOperationError>
+    pub fn set_puppet_master<P, O, M>(&self) -> Result<(), PuppetOperationError>
     where
+        P: Lifecycle,
         O: Lifecycle,
         M: Lifecycle,
-        P: Lifecycle,
     {
         let old_master = Pid::new::<O>();
         let new_master = Pid::new::<M>();
@@ -749,10 +749,15 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        let address = self
-            .get_postman::<P>()
-            .ok_or_else(PuppetDoesNotExistError::from_type::<P>)?;
-        Ok(address.send::<E>(message).await?)
+        let address = {
+            if let Some(address) = self.get_postman::<P>() {
+                address
+            } else {
+                self.spawn_self::<P>().await;
+                self.get_postman::<P>().unwrap()
+            }
+        };
+        Ok(address.send(message).await?)
     }
 
     /// Sends a message of type `E` to the puppet handler of type `P` and awaits a response.
@@ -781,9 +786,14 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        let address = self
-            .get_postman::<P>()
-            .ok_or_else(PuppetDoesNotExistError::from_type::<P>)?;
+        let address = {
+            if let Some(address) = self.get_postman::<P>() {
+                address
+            } else {
+                self.spawn_self::<P>().await;
+                self.get_postman::<P>().unwrap()
+            }
+        };
         Ok(address.send_and_await_response::<E>(message, None).await?)
     }
 
@@ -818,9 +828,14 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        let address = self
-            .get_postman::<P>()
-            .ok_or_else(PuppetDoesNotExistError::from_type::<P>)?;
+        let address = {
+            if let Some(address) = self.get_postman::<P>() {
+                address
+            } else {
+                self.spawn_self::<P>().await;
+                self.get_postman::<P>().unwrap()
+            }
+        };
         Ok(address
             .send_and_await_response::<E>(message, Some(duration))
             .await?)
@@ -1405,10 +1420,10 @@ mod tests {
         }
     }
 
-    pub fn register_puppet<M, P>(pptr: &Puppeter) -> Result<(), PuppetError>
+    pub fn register_puppet<P, M>(pptr: &Puppeter) -> Result<(), PuppetError>
     where
-        M: Lifecycle,
         P: Lifecycle,
+        M: Lifecycle,
     {
         let (message_tx, _message_rx) = mpsc::channel::<Box<dyn Envelope<P>>>(1);
         let (service_tx, _service_rx) = mpsc::channel::<ServicePacket>(1);
@@ -1424,7 +1439,7 @@ mod tests {
     async fn test_register() {
         let pptr = Puppeter::new();
 
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
 
         // Master puppet doesn't exist
 
@@ -1435,7 +1450,7 @@ mod tests {
         // Master is same as puppet
 
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
 
         // Puppet already exists
 
@@ -1514,7 +1529,7 @@ mod tests {
         let pptr = Puppeter::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1532,7 +1547,7 @@ mod tests {
         let pptr = Puppeter::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1550,7 +1565,7 @@ mod tests {
         let pptr = Puppeter::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1579,7 +1594,7 @@ mod tests {
         let pptr = Puppeter::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
         res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1593,7 +1608,7 @@ mod tests {
         let pptr = Puppeter::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
         res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1607,7 +1622,7 @@ mod tests {
         let pptr = Puppeter::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
-        let res = register_puppet::<MasterActor, PuppetActor>(&pptr);
+        let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
         res.unwrap();
         let master_pid = Pid::new::<MasterActor>();
         let puppet_pid = Pid::new::<PuppetActor>();

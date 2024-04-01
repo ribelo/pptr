@@ -52,7 +52,7 @@
 //! use pptr::prelude::*;
 //! use async_trait::async_trait;
 //!
-//! #[derive(Default, Clone)]
+//! #[derive(Debug, Clone, Default)]
 //! struct PingActor;
 //!
 //! #[async_trait]
@@ -120,7 +120,7 @@
 //!     }
 //! }
 //!
-//! #[derive(Default, Clone)]
+//! #[derive(Debug, Clone, Default)]
 //! struct PongActor;
 //!
 //! // By default, similar to 'PingActor', the 'reset' method returns a default instance of 'PongActor'.
