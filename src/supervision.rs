@@ -16,7 +16,6 @@
 //! ```
 
 use std::{
-    fmt,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -37,6 +36,12 @@ use crate::{
 /// - [`OneForAll`]: Restarts all puppets when any one fails.
 /// - [`RestForOne`]: Restarts the failed puppet and all puppets started after it.
 pub mod strategy {
+    /// A no-supervision strategy.
+    ///
+    /// This strategy does not handle failures and allows puppets to fail without intervention.
+    #[derive(Debug, Clone, Copy)]
+    pub struct NoSupervision;
+
     /// A one-to-one supervision strategy.
     ///
     /// This strategy handles failures individually for each puppet, without affecting others.
@@ -59,7 +64,7 @@ pub mod strategy {
 ///
 /// `RetryConfig` allows specifying the maximum number of retries, the duration within which
 /// retries should occur, and the time to wait between retry attempts.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RetryConfig {
     pub inner: Arc<Mutex<RetryConfigInner>>,
 }
@@ -74,6 +79,18 @@ pub struct RetryConfigInner {
     pub with_time_between: Option<Duration>,
     pub current_retry_count: usize,
     pub last_retry: Instant,
+}
+
+impl Default for RetryConfigInner {
+    fn default() -> Self {
+        Self {
+            max_retries: None,
+            within_duration: None,
+            with_time_between: None,
+            current_retry_count: 0,
+            last_retry: Instant::now(),
+        }
+    }
 }
 
 /// A builder for creating `RetryConfig` instances.
@@ -239,7 +256,7 @@ impl RetryConfig {
 ///
 /// Supervision strategies define how to handle failures in a puppet system.
 #[async_trait]
-pub trait SupervisionStrategy: fmt::Debug {
+pub trait SupervisionStrategy: Send + Sync {
     /// Handles a failure in the puppet system.
     ///
     /// This method is called when a puppet fails, allowing the supervision strategy to decide
