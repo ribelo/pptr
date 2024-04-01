@@ -1,3 +1,6 @@
+use atomic_take::AtomicTake;
+use indexmap::IndexSet;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::{
     any::Any,
     hash::BuildHasherDefault,
@@ -5,10 +8,6 @@ use std::{
     pin::Pin,
     sync::{Arc, Mutex},
 };
-
-use atomic_take::AtomicTake;
-use indexmap::IndexSet;
-use rustc_hash::{FxHashMap, FxHasher};
 use tokio::sync::{mpsc, watch};
 
 use crate::{
@@ -749,15 +748,12 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        let address = {
-            if let Some(address) = self.get_postman::<P>() {
-                address
-            } else {
-                self.spawn_self::<P>().await;
-                self.get_postman::<P>().unwrap()
-            }
-        };
-        Ok(address.send(message).await?)
+        if let Some(postman) = self.get_postman::<P>() {
+            Ok(postman.send(message).await?)
+        } else {
+            let address = self.spawn_self::<P>().await?;
+            Ok(address.send(message).await?)
+        }
     }
 
     /// Sends a message of type `E` to the puppet handler of type `P` and awaits a response.
@@ -786,15 +782,12 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        let address = {
-            if let Some(address) = self.get_postman::<P>() {
-                address
-            } else {
-                self.spawn_self::<P>().await;
-                self.get_postman::<P>().unwrap()
-            }
-        };
-        Ok(address.send_and_await_response::<E>(message, None).await?)
+        if let Some(postman) = self.get_postman::<P>() {
+            Ok(postman.send_and_await_response::<E>(message, None).await?)
+        } else {
+            let address = self.spawn_self::<P>().await?;
+            Ok(address.ask::<E>(message).await?)
+        }
     }
 
     /// Sends a message of type `E` to the puppet handler of type `P` with a timeout and awaits a response.
@@ -828,17 +821,14 @@ impl Puppeter {
         P: Handler<E>,
         E: Message,
     {
-        let address = {
-            if let Some(address) = self.get_postman::<P>() {
-                address
-            } else {
-                self.spawn_self::<P>().await;
-                self.get_postman::<P>().unwrap()
-            }
-        };
-        Ok(address
-            .send_and_await_response::<E>(message, Some(duration))
-            .await?)
+        if let Some(postman) = self.get_postman::<P>() {
+            Ok(postman
+                .send_and_await_response::<E>(message, Some(duration))
+                .await?)
+        } else {
+            let address = self.spawn_self::<P>().await?;
+            Ok(address.ask_with_timeout(message, duration).await?)
+        }
     }
 
     /// Sends a message of type `E` to the puppet handler of type `P` without awaiting a response.

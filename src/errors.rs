@@ -652,6 +652,12 @@ pub enum PuppetSendMessageError {
     PostmanError(#[from] PostmanError),
 }
 
+impl From<PuppetError> for PuppetSendMessageError {
+    fn from(err: PuppetError) -> Self {
+        PostmanError::PuppetError(err).into()
+    }
+}
+
 impl PuppetSendMessageError {
     #[must_use]
     pub fn get_puppet_error(&self) -> Option<&PuppetError> {
