@@ -2,7 +2,7 @@
 name = "pptr"
 description = "Type-Driven Asynchronous Actor Runtime"
 license = "Unlicense"
-version = "0.1.70"
+version = "0.1.71"
 authors = ["Rafał Krzyważnia <r.krzywaznia@gmail.com>"]
 edition = "2021"
 readme = "README.md"
