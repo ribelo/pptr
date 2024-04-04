@@ -28,7 +28,7 @@ use crate::{
 /// Implementors of this trait must be `Send`, `Sync`, `Sized`, `Clone`, and `'static`.
 #[allow(unused_variables)]
 #[async_trait]
-pub trait Lifecycle: Send + Sync + Sized + Clone + Default + 'static {
+pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     /// The supervision strategy used for managing the puppet's lifecycle.
     type Supervision: SupervisionStrategy;
 
@@ -40,7 +40,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + Default + 'static {
     ///
     /// The default implementation clones the current instance of the puppet.
     async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
-        Ok(Self::default())
+        Ok(self.clone())
     }
 
     /// Initializes the puppet.
@@ -483,12 +483,12 @@ impl Context {
     /// # Errors
     ///
     /// Returns a `PuppetError` if the puppet fails to spawn or initialize.
-    pub async fn spawn<P>(&self) -> Result<Address<P>, PuppetError>
+    pub async fn spawn<P>(&self, puppet: P) -> Result<Address<P>, PuppetError>
     where
         P: Lifecycle,
     {
         self.pptr
-            .puppet_builder::<P>()
+            .puppet_builder::<P>(puppet)
             .spawn_link_by_pid(self.pid)
             .await
     }
@@ -965,6 +965,17 @@ where
     ) -> Result<Self::Response, PuppetError>;
 }
 
+#[allow(clippy::struct_field_names)]
+#[derive(Debug)]
+pub(crate) struct PuppetHandle<P>
+where
+    P: Lifecycle,
+{
+    pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
+    pub(crate) message_rx: Mailbox<P>,
+    pub(crate) command_rx: ServiceMailbox,
+}
+
 /// A builder for creating and configuring a puppet.
 ///
 /// The `PuppetBuilder` struct allows for the creation and configuration of a puppet instance.
@@ -996,46 +1007,7 @@ where
 /// }
 ///
 /// let pptr = Puppeter::new();
-/// let builder = PuppetBuilder::<Puppet>::new(pptr);
-/// ```
-#[allow(clippy::struct_field_names)]
-#[derive(Debug)]
-pub(crate) struct PuppetHandle<P>
-where
-    P: Lifecycle,
-{
-    pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
-    pub(crate) message_rx: Mailbox<P>,
-    pub(crate) command_rx: ServiceMailbox,
-}
-
-/// Creates a new `PuppetBuilder` with the provided `Puppeter` instance.
-///
-/// This method initializes a new `PuppetBuilder` instance with default values for the
-/// message buffer size, command buffer size, and retry configuration.
-///
-/// # Arguments
-///
-/// - `pptr` - The `Puppeter` instance to associate with the puppet.
-///
-/// # Returns
-///
-/// A new `PuppetBuilder` instance with default configuration.
-///
-/// # Example
-///
-/// ```rust
-/// use pptr::prelude::*;
-///
-/// #[derive(Debug, Default, Clone)]
-/// struct Puppet;
-///
-/// impl Lifecycle for Puppet {
-///     type Supervision = OneForAll;
-/// }
-///
-/// let pptr = Puppeter::new();
-/// let builder = PuppetBuilder::<Puppet>::new(pptr);
+/// let builder = PuppetBuilder::new(Puppet::default(), pptr);
 /// ```
 ///
 /// # Safety
@@ -1064,10 +1036,10 @@ where
     /// This method initializes a new `PuppetBuilder` instance with default values for the
     /// message buffer size, command buffer size, and retry configuration.
     #[must_use]
-    pub fn new(pptr: Puppeter) -> Self {
+    pub fn new(puppet: P, pptr: Puppeter) -> Self {
         Self {
             pid: Pid::new::<P>(),
-            puppet: Some(P::default()),
+            puppet: Some(puppet),
             // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
             messages_buffer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
             // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero

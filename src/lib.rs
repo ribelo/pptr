@@ -161,11 +161,11 @@
 //!
 //!     // Spawn a 'PingActor' and specify 'PingActor' as its own supervisor.
 //!     // This means that 'PingActor' will manage itself.
-//!     pptr.spawn::<PingActor, PingActor>().await?;
+//!     pptr.spawn::<PingActor, PingActor>(PingActor::default()).await?;
 //!
 //!     // Spawn a 'PongActor' using the shorter 'spawn_self' method.
 //!     // This is equivalent to specifying 'PongActor' as its own supervisor.
-//!     pptr.spawn_self::<PongActor>().await?;
+//!     pptr.spawn_self(PongActor::default()).await?;
 //!
 //!     // Send an initial 'Ping' message to 'PingActor' with a counter value of 0.
 //!     // This starts the ping-pong game between 'PingActor' and 'PongActor'.
