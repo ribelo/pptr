@@ -265,21 +265,24 @@ pub trait SupervisionStrategy: Send + Sync {
     /// # Errors
     ///
     /// Returns a `PuppetError` if the failure cannot be handled.
+    async fn handle_failure(pptr: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError>;
+}
+
+#[async_trait]
+impl SupervisionStrategy for strategy::NoSupervision {
     async fn handle_failure(
-        post_office: &Puppeter,
-        master: Pid,
-        puppet: Pid,
-    ) -> Result<(), PuppetError>;
+        _pptr: &Puppeter,
+        _master: Pid,
+        _puppet: Pid,
+    ) -> Result<(), PuppetError> {
+        Ok(())
+    }
 }
 
 #[async_trait]
 impl SupervisionStrategy for strategy::OneToOne {
-    async fn handle_failure(
-        post_office: &Puppeter,
-        master: Pid,
-        puppet: Pid,
-    ) -> Result<(), PuppetError> {
-        Ok(post_office
+    async fn handle_failure(pptr: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
+        Ok(pptr
             .send_command_by_pid(master, puppet, ServiceCommand::Restart { stage: None })
             .await?)
     }
@@ -287,15 +290,10 @@ impl SupervisionStrategy for strategy::OneToOne {
 
 #[async_trait]
 impl SupervisionStrategy for strategy::OneForAll {
-    async fn handle_failure(
-        post_office: &Puppeter,
-        master: Pid,
-        _puppet: Pid,
-    ) -> Result<(), PuppetError> {
-        if let Some(puppets) = post_office.get_puppets_by_pid(master) {
+    async fn handle_failure(pptr: &Puppeter, master: Pid, _puppet: Pid) -> Result<(), PuppetError> {
+        if let Some(puppets) = pptr.get_puppets_by_pid(master) {
             for pid in puppets.into_iter().rev() {
-                post_office
-                    .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
+                pptr.send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
                     .await?;
             }
         }
@@ -305,20 +303,15 @@ impl SupervisionStrategy for strategy::OneForAll {
 
 #[async_trait]
 impl SupervisionStrategy for strategy::RestForOne {
-    async fn handle_failure(
-        post_office: &Puppeter,
-        master: Pid,
-        puppet: Pid,
-    ) -> Result<(), PuppetError> {
-        if let Some(puppets) = post_office.get_puppets_by_pid(master) {
+    async fn handle_failure(pptr: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
+        if let Some(puppets) = pptr.get_puppets_by_pid(master) {
             let mut restart_next = false;
             for pid in puppets.into_iter().rev() {
                 if pid == puppet {
                     restart_next = true;
                 }
                 if restart_next {
-                    post_office
-                        .send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
+                    pptr.send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
                         .await?;
                 }
             }
