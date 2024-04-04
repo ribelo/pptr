@@ -988,7 +988,7 @@ impl Puppeter {
             return Err(PuppetDoesNotExistError::new(master_pid).into());
         }
 
-        let mut puppet = P::default();
+        let mut puppet = builder.puppet.take().unwrap();
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<LifecycleStatus>(LifecycleStatus::Inactive);
         let (message_tx, message_rx) =
