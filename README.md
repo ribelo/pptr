@@ -184,11 +184,11 @@ your `Cargo.toml` file:
 
 ```toml
 [dependencies]
-puppeter = "0.1.68"
+puppeter = "0.2.0"
 ```
 
 ```rust
-use puppeter::prelude::*;
+use pptr::prelude::*;
 
 #[derive(Default)]
 struct PingActor;
