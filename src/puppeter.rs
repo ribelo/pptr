@@ -1185,6 +1185,53 @@ impl Puppeter {
         Some(f(any_ref))
     }
 
+    /// Borrows the resource of type `T` and passes it to the provided closure `f`.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// # pptr.add_resource::<i32>(10).unwrap();
+    /// let result = pptr.with_expected_resource::<i32, _, _>(|value| {
+    ///     assert_eq!(*value, 10);
+    ///     "success"
+    /// });
+    /// assert_eq!(result, "success");
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if:
+    /// - The internal mutex lock fails.
+    /// - The resource of type `T` doesn't exist.
+    /// - Downcasting the resource to type `T` fails.
+    ///
+    /// # Returns
+    ///
+    /// The return value `R` of the closure `f`.
+    pub fn with_expected_resource<T, F, R>(&self, f: F) -> R
+    where
+        T: Send + Sync + Clone + 'static,
+        F: FnOnce(&T) -> R,
+    {
+        let resource = {
+            let id = Id::new::<T>();
+            let resources_guard = self.resources.lock().expect("Failed to acquire mutex lock");
+            Arc::clone(resources_guard.get(&id).expect("Resource doesn't exist"))
+        };
+
+        let boxed = resource
+            .lock()
+            .expect("Failed to acquire mutex lock on resource");
+        let any_ref = boxed
+            .downcast_ref::<T>()
+            .expect("Failed to downcast resource");
+        f(any_ref)
+    }
+
     /// Mutably borrows the resource of type `T` and passes it to the provided closure `f`.
     ///
     /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
@@ -1226,6 +1273,53 @@ impl Puppeter {
             .lock()
             .expect("Failed to acquire mutex lock on resource");
         let any_mut = boxed.downcast_mut::<T>()?;
+        Some(f(any_mut))
+    }
+    /// Mutably borrows the resource of type `T` and passes it to the provided closure `f`.
+    ///
+    /// The resource must implement `Send`, `Sync`, `Clone`, and have a `'static` lifetime.
+    ///
+    /// # Example Usage
+    ///
+    /// ```
+    /// # use pptr::puppeter::Puppeter;
+    /// # let pptr = Puppeter::new();
+    /// # pptr.add_resource::<i32>(10).unwrap();
+    /// let result = pptr.with_expected_resource_mut::<i32, _, _>(|value| {
+    ///     *value += 1;
+    ///     "success"
+    /// }).unwrap();
+    /// assert_eq!(result, "success");
+    /// assert_eq!(pptr.expect_resource::<i32>(), 11);
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// This function will panic if:
+    /// - The internal mutex lock fails.
+    /// - The resource of type `T` doesn't exist.
+    /// - Downcasting the resource to type `T` fails.
+    ///
+    /// # Returns
+    ///
+    /// `Some(R)`, where `R` is the return type of the closure `f`.
+    pub fn with_expected_resource_mut<T, F, R>(&self, f: F) -> Option<R>
+    where
+        T: Send + Sync + Clone + 'static,
+        F: FnOnce(&mut T) -> R,
+    {
+        let resource = {
+            let id = Id::new::<T>();
+            let resources_guard = self.resources.lock().expect("Failed to acquire mutex lock");
+            Arc::clone(resources_guard.get(&id).expect("Resource doesn't exist"))
+        };
+
+        let mut boxed = resource
+            .lock()
+            .expect("Failed to acquire mutex lock on resource");
+        let any_mut = boxed
+            .downcast_mut::<T>()
+            .expect("Failed to downcast resource");
         Some(f(any_mut))
     }
 
