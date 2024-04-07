@@ -1,10 +1,29 @@
 //! # Puppeter
 //!
-//! Puppeter is a flexible and powerful actor-based framework for building asynchronous systems in Rust.
-//! With its type-driven API design, Puppeter provides a safe and convenient way to create and manage
-//! actors that communicate through message passing. Whether you're building a complex distributed
-//! system or a responsive user interface, Puppeter makes it easy to write efficient and maintainable
-//! asynchronous code.
+//! Puppeter (pptr) is an actor-based framework designed to simplify the
+//! development of composable and maintainable asynchronous systems in Rust. With
+//! its type-driven API design, Puppeter provides a safe and convenient way to
+//! create and manage actors that communicate through message passing.
+//!
+//! Puppeter is built with composability, encapsulation, and single responsibility
+//! in mind, rather than focusing on building large-scale distributed systems. This
+//! is reflected in its approach of allowing only one instance of an actor per
+//! type, promoting a modular and maintainable architecture. Each puppet
+//! encapsulates a specific responsibility and communicates with other puppets
+//! through message passing, leading to a more composable system.
+//!
+//! While this design decision might seem like a limitation, it excels in building
+//! regular systems that prioritize these principles, providing a high degree of
+//! scalability for typical applications. Puppeter's approach to building systems
+//! as a collection of independent, reusable components that communicate through
+//! message passing is driven by Alan Kay's vision of object-oriented programming.
+//!
+//! Rather than being another copy of Erlang OTP or Akka, Puppeter has different
+//! goals and aims to provide a fresh perspective at the intersection of the actor
+//! model and object-oriented programming through message passing. Whether you're
+//! building a responsive user interface or a modular system that values
+//! composability and maintainability, Puppeter makes it easy to write efficient
+//! and maintainable asynchronous code in Rust.
 //!
 //! ## Key Features
 //!
