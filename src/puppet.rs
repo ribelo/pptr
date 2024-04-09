@@ -1,8 +1,8 @@
-use std::num::NonZeroUsize;
+use std::{future::Future, num::NonZeroUsize};
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
-use tokio::sync::watch;
+use tokio::{sync::watch, task::JoinHandle};
 use tracing::debug;
 
 use crate::{
@@ -11,7 +11,7 @@ use crate::{
         CriticalError, PuppetDoesNotExistError, PuppetError, PuppetOperationError,
         PuppetSendCommandError, PuppetSendMessageError, ResourceAlreadyExist,
     },
-    executor::Executor,
+    executor::{self, Executor},
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
     puppeter::Puppeter,
@@ -932,6 +932,26 @@ impl Context {
     /// The error message can be any type that implements `ToString`.
     pub fn critical_error<E: ToString + ?Sized>(&self, error: &E) -> PuppetError {
         PuppetError::critical(self.pid, error)
+    }
+
+    pub fn spawn_task<F, Fut, O>(&self, task: F) -> JoinHandle<O>
+    where
+        F: FnOnce(Self) -> Fut + Send + 'static,
+        Fut: Future<Output = O> + Send + 'static,
+        O: Send + 'static,
+    {
+        let cloned_self = self.clone();
+        tokio::spawn(task(cloned_self))
+    }
+
+    pub fn spawn_heavy_task<F, Fut, O>(&self, task: F) -> executor::Job<O>
+    where
+        F: FnOnce(Self) -> Fut + Send + 'static,
+        Fut: Future<Output = O> + Send + 'static,
+        O: Send + 'static,
+    {
+        let cloned_self = self.clone();
+        self.pptr.executor.spawn(async { task(cloned_self).await })
     }
 }
 
