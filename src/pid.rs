@@ -59,7 +59,12 @@ impl Id {
     where
         T: 'static,
     {
-        let type_id = TypeId::of::<T>();
+        TypeId::of::<T>().into()
+    }
+}
+
+impl From<TypeId> for Id {
+    fn from(type_id: TypeId) -> Self {
         let mut hasher = FxHasher::default();
         type_id.hash(&mut hasher);
         Self(hasher.finish())
