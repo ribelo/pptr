@@ -21,7 +21,7 @@ use crate::{
         PuppetDoesNotExistError, PuppetError, PuppetOperationError, PuppetSendCommandError,
         PuppetSendMessageError, ResourceAlreadyExist,
     },
-    executor::DedicatedExecutor,
+    executor::{self, DedicatedExecutor},
     message::{
         Envelope, Mailbox, Message, Postman, ServiceCommand, ServiceMailbox, ServicePacket,
         ServicePostman,
@@ -1352,14 +1352,24 @@ impl Puppeter {
         self.get_resource::<T>().expect("Resource doesn't exist")
     }
 
-    pub fn task<F, Fut, O>(&self, f: F) -> JoinHandle<O>
+    pub fn spawn_task<F, Fut, O>(&self, task: F) -> JoinHandle<O>
     where
         F: FnOnce(Self) -> Fut + Send + 'static,
         Fut: Future<Output = O> + Send + 'static,
         O: Send + 'static,
     {
         let cloned_self = self.clone();
-        tokio::spawn(f(cloned_self))
+        tokio::spawn(task(cloned_self))
+    }
+
+    pub fn spawn_heavy_task<F, Fut, O>(&self, task: F) -> executor::Job<O>
+    where
+        F: FnOnce(Self) -> Fut + Send + 'static,
+        Fut: Future<Output = O> + Send + 'static,
+        O: Send + 'static,
+    {
+        let cloned_self = self.clone();
+        self.executor.spawn(async { task(cloned_self).await })
     }
 }
 
