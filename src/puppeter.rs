@@ -3,12 +3,16 @@ use indexmap::IndexSet;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::{
     any::Any,
+    future::Future,
     hash::BuildHasherDefault,
     num::NonZeroUsize,
     pin::Pin,
     sync::{Arc, Mutex},
 };
-use tokio::sync::{mpsc, watch};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinHandle,
+};
 
 use crate::{
     address::Address,
@@ -1346,6 +1350,16 @@ impl Puppeter {
         T: Send + Sync + Clone + 'static,
     {
         self.get_resource::<T>().expect("Resource doesn't exist")
+    }
+
+    pub fn task<F, Fut, O>(&self, f: F) -> JoinHandle<O>
+    where
+        F: FnOnce(Self) -> Fut + Send + 'static,
+        Fut: Future<Output = O> + Send + 'static,
+        O: Send + 'static,
+    {
+        let cloned_self = self.clone();
+        tokio::spawn(f(cloned_self))
     }
 }
 
