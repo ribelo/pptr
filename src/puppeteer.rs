@@ -83,7 +83,7 @@ type FxIndexSet<T> = IndexSet<T, BuildHasherDefault<FxHasher>>;
 /// * `failure_rx`: A receiver for critical errors reported by the system, wrapped in an `Arc` and
 ///   `AtomicTake` for concurrent access.
 #[derive(Clone, Debug)]
-pub struct Puppeter {
+pub struct Puppeteer {
     pub(crate) message_postmans: Arc<Mutex<FxHashMap<Pid, BoxedAny>>>,
     pub(crate) service_postmans: Arc<Mutex<FxHashMap<Pid, ServicePostman>>>,
     pub(crate) statuses: Arc<Mutex<FxHashMap<Pid, StatusChannels>>>,
@@ -95,14 +95,14 @@ pub struct Puppeter {
     pub(crate) failure_rx: Arc<AtomicTake<mpsc::UnboundedReceiver<CriticalError>>>,
 }
 
-impl Default for Puppeter {
+impl Default for Puppeteer {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[allow(clippy::expect_used)]
-impl Puppeter {
+impl Puppeteer {
     /// Constructs a new instance of Puppeter, which acts as a manager for various actors within
     /// the framework.
     ///
@@ -112,8 +112,8 @@ impl Puppeter {
     /// # Examples
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// let pptr = Puppeteer::new();
     /// // Now you can use `puppeter` to manage actors.
     /// ```
     ///
@@ -149,9 +149,9 @@ impl Puppeter {
     ///
     /// ```rust
     /// # use std::pin::Pin;
-    /// # use pptr::puppeter::Puppeter;
+    /// # use pptr::puppeteer::Puppeteer;
     ///
-    /// # let pptr = Puppeter::new();
+    /// # let pptr = Puppeteer::new();
     /// pptr.on_unrecoverable_failure(|pptr, error| {
     ///     Box::pin(async move {
     ///         println!("Unrecoverable error encountered: {:?}", error);
@@ -167,7 +167,7 @@ impl Puppeter {
     pub async fn on_unrecoverable_failure<F>(&self, f: F)
     where
         F: FnOnce(
-                Puppeter,
+                Puppeteer,
                 CriticalError,
             ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
             + Send
@@ -192,12 +192,12 @@ impl Puppeter {
     ///
     /// ```rust
     /// # use std::pin::Pin;
-    /// # use pptr::puppeter::Puppeter;
+    /// # use pptr::puppeteer::Puppeteer;
     /// # use tokio::time::{timeout, Duration};
     ///
     /// # #[tokio::main]
     /// # async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    /// let pptr = Puppeter::new();
+    /// let pptr = Puppeteer::new();
     /// let result = timeout(Duration::from_millis(100), pptr.wait_for_unrecoverable_failure()).await;
     ///
     /// match result {
@@ -396,7 +396,7 @@ impl Puppeter {
     /// # impl Lifecycle for Puppet {
     /// #     type Supervision = OneForAll;
     /// # }
-    /// let pptr = Puppeter::new();
+    /// let pptr = Puppeteer::new();
     /// if let Some(receiver) = pptr.subscribe_puppet_status::<Puppet>() {
     ///     // Use the receiver to get status updates for Puppet
     ///     let status = receiver.borrow();
@@ -446,7 +446,7 @@ impl Puppeter {
     /// # impl Lifecycle for Puppet {
     /// #     type Supervision = OneForAll;
     /// # }
-    /// # let pptr = Puppeter::new();
+    /// # let pptr = Puppeteer::new();
     /// if let Some(status) = pptr.get_puppet_status::<Puppet>() {
     ///     println!("Current status: {:?}", status);
     /// }
@@ -1010,11 +1010,7 @@ impl Puppeter {
         )?;
         let retry_config = builder.retry_config.take().unwrap_or_default();
 
-        let puppeter = Context {
-            pid,
-            pptr: self.clone(),
-            retry_config,
-        };
+        let puppeteer = Context::new::<P>(self.clone(), retry_config);
 
         let handle = PuppetHandle {
             status_rx: status_rx.clone(),
@@ -1029,16 +1025,16 @@ impl Puppeter {
             pptr: self.clone(),
         };
 
-        puppet.on_init(&puppeter).await?;
-        puppeter.start(&mut puppet, false).await?;
+        puppet.on_init(&puppeteer).await?;
+        puppeteer.start(&mut puppet, false).await?;
 
-        tokio::spawn(run_puppet_loop(puppet, puppeter, handle));
+        tokio::spawn(run_puppet_loop(puppet, puppeteer, handle));
         Ok(address)
     }
 
     /// Creates a new `PuppetBuilder` for the specified puppet type `P`.
     ///
-    /// This method returns a `PuppetBuilder` instance associated with the current `Puppeter`.
+    /// This method returns a `PuppetBuilder` instance associated with the current `Puppeteer`.
     /// The generic parameter `P` specifies the type of the puppet and must implement the `Lifecycle`
     /// trait.
     ///
@@ -1058,7 +1054,7 @@ impl Puppeter {
     ///     type Supervision = OneForAll;
     /// }
     ///
-    /// let pptr = Puppeter::new();
+    /// let pptr = Puppeteer::new();
     /// let builder = pptr.puppet_builder(Puppet::default());
     #[must_use]
     pub fn puppet_builder<P>(&self, puppet: P) -> PuppetBuilder<P>
@@ -1076,8 +1072,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// pptr.add_resource::<i32>(10).unwrap();
     /// ```
     ///
@@ -1114,8 +1110,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// # pptr.add_resource::<i32>(10).unwrap();
     /// let value = pptr.get_resource::<i32>().unwrap();
     /// assert_eq!(value, 10);
@@ -1153,8 +1149,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// # pptr.add_resource::<i32>(10).unwrap();
     /// let result = pptr.with_resource::<i32, _, _>(|value| {
     ///     assert_eq!(*value, 10);
@@ -1196,8 +1192,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// # pptr.add_resource::<i32>(10).unwrap();
     /// let result = pptr.with_expected_resource::<i32, _, _>(|value| {
     ///     assert_eq!(*value, 10);
@@ -1243,8 +1239,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// # pptr.add_resource::<i32>(10).unwrap();
     /// let result = pptr.with_resource_mut::<i32, _, _>(|value| {
     ///     *value += 1;
@@ -1286,8 +1282,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// # pptr.add_resource::<i32>(10).unwrap();
     /// let result = pptr.with_expected_resource_mut::<i32, _, _>(|value| {
     ///     *value += 1;
@@ -1334,8 +1330,8 @@ impl Puppeter {
     /// # Example Usage
     ///
     /// ```
-    /// # use pptr::puppeter::Puppeter;
-    /// # let pptr = Puppeter::new();
+    /// # use pptr::puppeteer::Puppeteer;
+    /// # let pptr = Puppeteer::new();
     /// # pptr.add_resource::<i32>(10).unwrap();
     /// let value = pptr.expect_resource::<i32>();
     /// assert_eq!(value, 10);
@@ -1387,12 +1383,9 @@ impl Puppeter {
 /// # Panics
 ///
 /// This function does not explicitly panic, but may propagate panics from the `handle_command` or
-/// `handle_message` methods of the `Puppet` and `Puppeter` structs.
-pub(crate) async fn run_puppet_loop<P>(
-    mut puppet: P,
-    mut puppeter: Context,
-    mut handle: PuppetHandle<P>,
-) where
+/// `handle_message` methods of the `Puppet` and `Puppeteer` structs.
+pub(crate) async fn run_puppet_loop<P>(mut puppet: P, mut ctx: Context, mut handle: PuppetHandle<P>)
+where
     P: Lifecycle,
 {
     let mut puppet_status = handle.status_rx;
@@ -1402,33 +1395,33 @@ pub(crate) async fn run_puppet_loop<P>(
             Ok(()) = puppet_status.changed() => {
                 if matches!(*puppet_status.borrow(), LifecycleStatus::Inactive
                     | LifecycleStatus::Failed) {
-                    tracing::info!(puppet = %puppeter.pid, "Stopping loop due to puppet status change");
+                    tracing::info!(puppet = %ctx.pid, "Stopping loop due to puppet status change");
                     break;
                 }
             }
             Some(mut service_packet) = handle.command_rx.recv() => {
                 if matches!(*puppet_status.borrow(), LifecycleStatus::Active) {
-                    if let Err(err) = service_packet.handle_command(&mut puppet, &mut puppeter).await {
-                        tracing::error!(puppet = %puppeter.pid, "Failed to handle command: {}", err);
+                    if let Err(err) = service_packet.handle_command(&mut puppet, &mut ctx).await {
+                        tracing::error!(puppet = %ctx.pid, "Failed to handle command: {}", err);
                     }
                 } else {
-                    tracing::debug!(puppet = %puppeter.pid, "Ignoring command due to non-Active puppet status");
+                    tracing::debug!(puppet = %ctx.pid, "Ignoring command due to non-Active puppet status");
                     let status = *puppet_status.borrow();
-                    let error_response = PuppetCannotHandleMessage::new(puppeter.pid, status).into();
+                    let error_response = PuppetCannotHandleMessage::new(ctx.pid, status).into();
                     service_packet.reply_error(error_response);
                 }
             }
             Some(mut envelope) = handle.message_rx.recv() => {
                 let status = *puppet_status.borrow();
                 if matches!(status, LifecycleStatus::Active) {
-                    envelope.handle_message(&mut puppet, &mut puppeter).await;
+                    envelope.handle_message(&mut puppet, &mut ctx).await;
                 } else {
-                    tracing::debug!(puppet = %puppeter.pid,  "Ignoring message due to non-Active puppet status");
-                    envelope.reply_error(&puppeter, PuppetCannotHandleMessage::new(puppeter.pid, status).into()).await;
+                    tracing::debug!(puppet = %ctx.pid,  "Ignoring message due to non-Active puppet status");
+                    envelope.reply_error(&ctx, PuppetCannotHandleMessage::new(ctx.pid, status).into()).await;
                 }
             }
             else => {
-                tracing::debug!(puppet = %puppeter.pid, "Stopping loop due to closed channels");
+                tracing::debug!(puppet = %ctx.pid, "Stopping loop due to closed channels");
                 break;
             }
         }
@@ -1560,7 +1553,7 @@ mod tests {
         }
     }
 
-    pub fn register_puppet<P, M>(pptr: &Puppeter) -> Result<(), PuppetError>
+    pub fn register_puppet<P, M>(pptr: &Puppeteer) -> Result<(), PuppetError>
     where
         P: Lifecycle,
         M: Lifecycle,
@@ -1577,7 +1570,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
 
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
 
@@ -1599,7 +1592,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_is_puppet_exists() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         assert!(pptr.is_puppet_exists::<PuppetActor>());
@@ -1608,7 +1601,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_postman() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         assert!(pptr.get_postman::<PuppetActor>().is_some());
@@ -1617,7 +1610,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_service_postman_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1628,7 +1621,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_status_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1642,7 +1635,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_status_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1655,7 +1648,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_subscribe_status_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
         assert!(res.is_ok());
         let puppet_pid = Pid::new::<PuppetActor>();
@@ -1666,7 +1659,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_has_puppet_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
@@ -1684,7 +1677,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_has_permission_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
@@ -1702,7 +1695,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_master_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
@@ -1715,7 +1708,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_master_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         assert!(res.is_ok());
         let res = register_puppet::<PuppetActor, PuppetActor>(&pptr);
@@ -1731,7 +1724,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_puppets_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
@@ -1745,7 +1738,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_detach_puppet_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
@@ -1759,7 +1752,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_puppet_by_pid() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = register_puppet::<MasterActor, MasterActor>(&pptr);
         res.unwrap();
         let res = register_puppet::<PuppetActor, MasterActor>(&pptr);
@@ -1773,7 +1766,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_spawn() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = pptr.spawn::<_, PuppetActor>(PuppetActor::default()).await;
         res.unwrap();
         let res = pptr.spawn::<_, MasterActor>(PuppetActor::default()).await;
@@ -1782,7 +1775,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
 
         let res = pptr.spawn::<_, PuppetActor>(PuppetActor::default()).await;
         res.unwrap();
@@ -1797,7 +1790,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ask() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
 
         let res = pptr.spawn_self(PuppetActor::default()).await;
         res.unwrap();
@@ -1812,7 +1805,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ask_with_timeout() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
 
         let res = pptr.spawn_self(PuppetActor::default()).await;
         assert!(res.is_ok());
@@ -1838,7 +1831,7 @@ mod tests {
         #[async_trait]
         impl Lifecycle for CounterPuppet {
             type Supervision = OneForAll;
-            async fn reset(&self, _puppeter: &Context) -> Result<Self, CriticalError> {
+            async fn reset(&self, _ctx: &Context) -> Result<Self, CriticalError> {
                 Ok(CounterPuppet::default())
             }
         }
@@ -1853,14 +1846,14 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _msg: IncrementCounter,
-                puppeter: &Context,
+                ctx: &Context,
             ) -> Result<Self::Response, PuppetError> {
                 println!("Counter: {}", self.counter);
                 if self.counter < 10 {
                     self.counter += 1;
-                    puppeter.send::<Self, _>(IncrementCounter).await?;
+                    ctx.send::<Self, _>(IncrementCounter).await?;
                 } else {
-                    puppeter.send::<Self, _>(DebugCounterPuppet).await?;
+                    ctx.send::<Self, _>(DebugCounterPuppet).await?;
                 }
                 Ok(self.counter)
             }
@@ -1876,13 +1869,13 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _msg: DebugCounterPuppet,
-                _puppeter: &Context,
+                _ctx: &Context,
             ) -> Result<Self::Response, PuppetError> {
                 Ok(self.counter)
             }
         }
 
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let address = pptr.spawn_self(CounterPuppet::default()).await.unwrap();
         address.send(IncrementCounter).await.unwrap();
         // wait 1 second for the puppet to finish
@@ -1894,7 +1887,7 @@ mod tests {
     #[tokio::test]
     #[allow(unused_assignments)]
     async fn test_successful_recovery_after_failure() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = pptr.spawn_self(PuppetActor::default()).await;
         res.unwrap();
         let mut success = false;
@@ -1912,7 +1905,7 @@ mod tests {
     #[tokio::test]
     #[allow(unused_assignments)]
     async fn test_failed_recovery_after_failure() {
-        let pptr = Puppeter::new();
+        let pptr = Puppeteer::new();
         let res = pptr.spawn_self(MasterActor::default()).await;
         res.unwrap();
         let mut success = false;

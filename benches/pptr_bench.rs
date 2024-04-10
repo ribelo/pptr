@@ -45,7 +45,7 @@ use pptr::{
 //     async fn handle_message(
 //         &mut self,
 //         msg: PingMessage,
-//         puppeter: &Puppeter,
+//         Puppeteer: &Puppeteer,
 //     ) -> Result<usize, PuppetError> {
 //         self.count += msg.0;
 //         Ok(self.count)
@@ -59,7 +59,7 @@ use pptr::{
 //     async fn handle_message(
 //         &mut self,
 //         msg: PingMessage,
-//         puppeter: &Puppeter,
+//         Puppeteer: &Puppeteer,
 //     ) -> Result<usize, PuppetError> {
 //         self.count += msg.0;
 //         Ok(self.count)
@@ -141,7 +141,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion concurrent send ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ConcurrentPingActor { count 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 gru.send::<ConcurrentPingActor, _>(PingMessage(10))
@@ -155,7 +155,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion concurrent address send ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ConcurrentPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 address.send(PingMessage(10)).await.unwrap();
@@ -167,7 +167,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion concurrent ask ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ConcurrentPingActor { count: 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = gru.ask::<ConcurrentPingActor,
@@ -179,7 +179,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion address concurrent ask ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ConcurrentPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = address.ask(PingMessage(10)).await;
@@ -192,7 +192,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion parallel send ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 gru.send::<ParallelPingActor, _>(PingMessage(10))
@@ -207,7 +207,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion parallel address send ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 address.send(PingMessage(10)).await.unwrap();
@@ -220,7 +220,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion parallel ask ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let _address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = gru.ask::<ParallelPingActor,
@@ -233,7 +233,7 @@ fn benchmarks(c: &mut Criterion) {
     // c.bench_function("minion address parallel ask ping 1e5", |b| {
     //     b.iter(|| {
     //         runtime.block_on(async {
-    //             let gru = Puppeter::new();
+    //             let gru = Puppeteer::new();
     //             let actor = PuppetStruct::new(ParallelPingActor { count: 10     // });             let address = gru.spawn(actor).unwrap();
     //             for _ in 0..100_000 {
     //                 let _res = address.ask(PingMessage(10)).await;

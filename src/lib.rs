@@ -1,11 +1,11 @@
-//! # Puppeter
+//! # Puppeteer
 //!
-//! Puppeter (pptr) is an actor-based framework designed to simplify the
+//! Puppeteer (pptr) is an actor-based framework designed to simplify the
 //! development of composable and maintainable asynchronous systems in Rust. With
-//! its type-driven API design, Puppeter provides a safe and convenient way to
+//! its type-driven API design, Puppeteer provides a safe and convenient way to
 //! create and manage actors that communicate through message passing.
 //!
-//! Puppeter is built with composability, encapsulation, and single responsibility
+//! Puppeteer is built with composability, encapsulation, and single responsibility
 //! in mind, rather than focusing on building large-scale distributed systems. This
 //! is reflected in its approach of allowing only one instance of an actor per
 //! type, promoting a modular and maintainable architecture. Each puppet
@@ -14,55 +14,55 @@
 //!
 //! While this design decision might seem like a limitation, it excels in building
 //! regular systems that prioritize these principles, providing a high degree of
-//! scalability for typical applications. Puppeter's approach to building systems
+//! scalability for typical applications. Puppeteer's approach to building systems
 //! as a collection of independent, reusable components that communicate through
 //! message passing is driven by Alan Kay's vision of object-oriented programming.
 //!
-//! Rather than being another copy of Erlang OTP or Akka, Puppeter has different
+//! Rather than being another copy of Erlang OTP or Akka, Puppeteer has different
 //! goals and aims to provide a fresh perspective at the intersection of the actor
 //! model and object-oriented programming through message passing. Whether you're
 //! building a responsive user interface or a modular system that values
-//! composability and maintainability, Puppeter makes it easy to write efficient
+//! composability and maintainability, Puppeteer makes it easy to write efficient
 //! and maintainable asynchronous code in Rust.
 //!
 //! ## Key Features
 //!
-//! - **Type-Driven Development**: Puppeter leverages Rust's strong type system to ensure
+//! - **Type-Driven Development**: Puppeteer leverages Rust's strong type system to ensure
 //!   compile-time safety and runtime reliability. It provides a seamless and expressive API for
 //!   defining actors and their message-handling behaviors.
 //!
-//! - **Ergonomic API**: Puppeter offers a clean and intuitive API for creating actors and handling
+//! - **Ergonomic API**: Puppeteer offers a clean and intuitive API for creating actors and handling
 //!   messages. It integrates seamlessly with popular Rust libraries and frameworks, enabling
 //!   developers to build highly concurrent applications with ease.
 //!
-//! - **Effortless Asynchronous Programming**: Puppeter simplifies asynchronous programming in Rust
+//! - **Effortless Asynchronous Programming**: Puppeteer simplifies asynchronous programming in Rust
 //!   by utilizing the Tokio runtime and working well with Rust's `async`/`await`. It allows you to
 //!   write asynchronous code that is easy to read and understand.
 //!
-//! - **Performance-Driven**: Puppeter is designed with performance in mind. It efficiently handles
+//! - **Performance-Driven**: Puppeteer is designed with performance in mind. It efficiently handles
 //!   messages concurrently and in parallel, offering different execution modes to suit your specific
 //!   needs.
 //!
-//! - **Flexible Supervision**: Puppeter provides a versatile oversight system that allows you to
+//! - **Flexible Supervision**: Puppeteer provides a versatile oversight system that allows you to
 //!   supervise and organize actors hierarchically. It offers predefined supervision strategies and
 //!   supports custom strategies to handle errors and maintain system stability.
 //!
-//! - **Robust Error Handling**: Puppeter includes built-in features for monitoring actors and
+//! - **Robust Error Handling**: Puppeteer includes built-in features for monitoring actors and
 //!   handling errors. It provides mechanisms to report and manage critical and non critical errors,
 //!   ensuring the stability and reliability of your system.
 //!
-//! - **Lifecycle Management**: Puppeter offers built-in preimplemented methods for managing the
+//! - **Lifecycle Management**: Puppeteer offers built-in preimplemented methods for managing the
 //!   lifecycle of actors, including initialization, startup, shutdown, and state reset.
 //!
-//! - **Resource Management**: Puppeter provides a way to manage resources that can be shared among
+//! - **Resource Management**: Puppeteer provides a way to manage resources that can be shared among
 //!   actors. In Rust, some libraries provide structures that are not easy and idiomatic to send
 //!   between actor, making it challenging to pass them through messages or include them as part of
 //!   an actor's state due to Rust's ownership rules. Examples include UI libraries where context and
-//!   ui state cannot be easily shared. Puppeter's resource management system offers a solution to
+//!   ui state cannot be easily shared. Puppeteer's resource management system offers a solution to
 //!   handle such cases by allowing actors to safely access and modify shared resources. This enables
 //!   scenarios like implementing The Elm Architecture (TEA) or Redux-like state management, where
 //!   actor or actors can update a common shared state. While sharing state among actors is
-//!   generally not recommended, Puppeter's resource management provides a practical approach when
+//!   generally not recommended, Puppeteer's resource management provides a practical approach when
 //!   it becomes necessary, ensuring safety and efficiency in the actor-based system.
 //!
 //! ## Getting Started
@@ -175,8 +175,8 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), PuppetError> {
 //!
-//!     // Create a new instance of the Puppeter.
-//!     let pptr = Puppeter::new();
+//!     // Create a new instance of the Puppeteer.
+//!     let pptr = Puppeteer::new();
 //!
 //!     // Spawn a 'PingActor' and specify 'PingActor' as its own supervisor.
 //!     // This means that 'PingActor' will manage itself.
@@ -202,7 +202,7 @@ pub mod executor;
 pub mod message;
 pub mod pid;
 pub mod puppet;
-pub mod puppeter;
+pub mod puppeteer;
 pub mod supervision;
 
 pub mod prelude {
@@ -220,6 +220,6 @@ pub mod prelude {
     pub use crate::puppet::Lifecycle;
     pub use crate::puppet::Puppet;
     pub use crate::puppet::PuppetBuilder;
-    pub use crate::puppeter::Puppeter;
+    pub use crate::puppeteer::Puppeteer;
     pub use crate::supervision::strategy::*;
 }

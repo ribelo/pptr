@@ -14,7 +14,7 @@ use crate::{
     executor::{self, Executor},
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
-    puppeter::Puppeter,
+    puppeteer::Puppeteer,
     supervision::{RetryConfig, RetryConfigBuilder, SupervisionStrategy},
 };
 
@@ -106,15 +106,26 @@ pub enum LifecycleStatus {
 /// Represents the context of a puppet.
 ///
 /// The `Context` struct contains information about a puppet's context, including its process ID (`pid`),
-/// the `Puppeter` instance, and the retry configuration.
+/// the `Puppeteer` instance, and the retry configuration.
 #[derive(Clone, Debug)]
 pub struct Context {
     pub pid: Pid,
-    pub(crate) pptr: Puppeter,
+    pub(crate) pptr: Puppeteer,
     pub(crate) retry_config: RetryConfig,
 }
 
 impl Context {
+    pub(crate) fn new<P>(pptr: Puppeteer, retry_config: RetryConfig) -> Self
+    where
+        P: Lifecycle,
+    {
+        Self {
+            pid: Pid::new::<P>(),
+            pptr,
+            retry_config,
+        }
+    }
+
     /// Starts the puppet and its associated puppets.
     ///
     /// This method initializes and starts the puppet and its associated puppets based on the
@@ -1013,7 +1024,7 @@ where
 /// - `messages_buffer_size`: The buffer size for the puppet's message mailbox, represented as a `NonZeroUsize`.
 /// - `commands_buffer_size`: The buffer size for the puppet's command mailbox, represented as a `NonZeroUsize`.
 /// - `retry_config`: An optional `RetryConfig` specifying the retry behavior for the puppet.
-/// - `pptr`: An optional reference to the `Puppeter` instance associated with the puppet.
+/// - `pptr`: An optional reference to the `Puppeteer` instance associated with the puppet.
 ///
 /// # Example
 ///
@@ -1027,7 +1038,7 @@ where
 ///     type Supervision = OneForAll;
 /// }
 ///
-/// let pptr = Puppeter::new();
+/// let pptr = Puppeteer::new();
 /// let builder = PuppetBuilder::new(Puppet::default(), pptr);
 /// ```
 ///
@@ -1045,7 +1056,7 @@ where
     pub messages_buffer_size: NonZeroUsize,
     pub commands_buffer_size: NonZeroUsize,
     pub retry_config: Option<RetryConfig>,
-    pub pptr: Option<Puppeter>,
+    pub pptr: Option<Puppeteer>,
 }
 
 impl<P> PuppetBuilder<P>
@@ -1057,7 +1068,7 @@ where
     /// This method initializes a new `PuppetBuilder` instance with default values for the
     /// message buffer size, command buffer size, and retry configuration.
     #[must_use]
-    pub fn new(puppet: P, pptr: Puppeter) -> Self {
+    pub fn new(puppet: P, pptr: Puppeteer) -> Self {
         Self {
             pid: Pid::new::<P>(),
             puppet: Some(puppet),
@@ -1095,7 +1106,7 @@ where
     /// Spawns an independent puppet (actor) on the `pptr` runtime.
     ///
     /// This method spawns a puppet without a manager, making it independent. It takes a reference
-    /// to the `Puppeter` runtime and returns a `Result` containing the `Address` of the spawned
+    /// to the `Puppeteer` runtime and returns a `Result` containing the `Address` of the spawned
     /// puppet on success, or a `PuppetError` on failure.
     pub async fn spawn(mut self) -> Result<Address<P>, PuppetError>
     where
@@ -1107,7 +1118,7 @@ where
 
     /// Spawns a puppet (actor) with a manager on the `pptr` runtime.
     ///
-    /// This method spawns a puppet `P` with a manager `M`. It takes a reference to the `Puppeter`
+    /// This method spawns a puppet `P` with a manager `M`. It takes a reference to the `Puppeteer`
     /// runtime and returns a `Result` containing the `Address` of the spawned puppet on success,
     /// or a `PuppetError` on failure.
     pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
@@ -1122,7 +1133,7 @@ where
     /// Spawns a puppet (actor) with a specified master PID on the `pptr` runtime.
     ///
     /// This method spawns a puppet `P` with the provided `master_pid`. It takes ownership of the
-    /// `Puppeter` runtime and returns a `Result` containing the `Address` of the spawned puppet on
+    /// `Puppeteer` runtime and returns a `Result` containing the `Address` of the spawned puppet on
     /// success, or a `PuppetError` on failure.
     pub(crate) async fn spawn_link_by_pid(
         mut self,
@@ -1146,69 +1157,45 @@ mod tests {
 
     use super::*;
 
-    // #[tokio::test]
-    // async fn it_works() {
-    //     #[derive(Debug, Clone, Message)]
-    //     pub struct SleepMessage {
-    //         i: i32,
-    //     }
-    //
-    //     #[derive(Debug, Default, Clone)]
-    //     pub struct MasterActor {}
-    //
-    //     impl Lifecycle for MasterActor {
-    //         type Supervision = OneForAll;
-    //     }
-    //
-    //     #[derive(Debug, Default, Clone)]
-    //     pub struct SleepActor {
-    //         i: i32,
-    //     }
-    //
-    //     #[async_trait]
-    //     impl Lifecycle for SleepActor {
-    //         type Supervision = OneForAll;
-    //     }
-    //
-    //     #[async_trait]
-    //     impl Handler<SleepMessage> for SleepActor {
-    //         type Response = i32;
-    //         type Executor = ConcurrentExecutor;
-    //
-    //         async fn handle_message(
-    //             &mut self,
-    //             msg: SleepMessage,
-    //             puppeter: &Puppeter,
-    //         ) -> Result<Self::Response, PuppetError> {
-    //             println!("Sleeping: {:?}", self.i);
-    //             tokio::time::sleep(Duration::from_secs(1)).await;
-    //             Ok(1)
-    //         }
-    //     }
-    //
-    //     let post_office = MasterOfPuppets::default();
-    //
-    //     let master = PuppetBuilder::new(MasterActor::default())
-    //         .with_post_office(&post_office)
-    //         .spawn()
-    //         .await
-    //         .unwrap();
-    //
-    //     let sleep_actor = PuppetBuilder::new(SleepActor::default())
-    //         .with_post_office(&post_office)
-    //         .spawn_link::<MasterActor>()
-    //         .await
-    //         .unwrap();
-    //
-    //     for _ in 0..5 {
-    //         sleep_actor
-    //             .send(SleepMessage { i: 1 })
-    //             .await
-    //             .expect("Failed to send message");
-    //     }
-    //
-    //     // if let Err(err) = res {}
-    //
-    //     tokio::time::sleep(std::time::Duration::from_millis(1000 * 5)).await;
-    // }
+    #[derive(Debug, Clone, Default)]
+    struct PuppetActor;
+
+    #[async_trait]
+    impl Lifecycle for PuppetActor {
+        type Supervision = OneForAll;
+    }
+
+    #[tokio::test]
+    async fn test_spawn_task() {
+        let pptr = Puppeteer::new();
+        let retry_config = RetryConfig::default();
+        let context = Context::new::<PuppetActor>(pptr, retry_config);
+
+        let handle = context.spawn_task(|ctx: Context| {
+            async move {
+                let x = ctx.critical_error("foo");
+                42
+            }
+        });
+        let result = handle.await.unwrap();
+
+        assert_eq!(result, 42);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_heavy_task() {
+        let pptr = Puppeteer::new();
+        let retry_config = RetryConfig::default();
+        let context = Context::new::<PuppetActor>(pptr, retry_config);
+
+        let handle = context.spawn_task(|ctx: Context| {
+            async move {
+                let x = ctx.critical_error("foo");
+                42
+            }
+        });
+        let result = handle.await.unwrap();
+
+        assert_eq!(result, 42);
+    }
 }

@@ -26,7 +26,7 @@ use crate::{
     errors::{PuppetError, RetryError},
     message::ServiceCommand,
     pid::Pid,
-    puppeter::Puppeter,
+    puppeteer::Puppeteer,
 };
 
 /// Defines supervision strategies for handling failures in a puppet system.
@@ -265,13 +265,13 @@ pub trait SupervisionStrategy: Send + Sync {
     /// # Errors
     ///
     /// Returns a `PuppetError` if the failure cannot be handled.
-    async fn handle_failure(pptr: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError>;
+    async fn handle_failure(pptr: &Puppeteer, master: Pid, puppet: Pid) -> Result<(), PuppetError>;
 }
 
 #[async_trait]
 impl SupervisionStrategy for strategy::NoSupervision {
     async fn handle_failure(
-        _pptr: &Puppeter,
+        _pptr: &Puppeteer,
         _master: Pid,
         _puppet: Pid,
     ) -> Result<(), PuppetError> {
@@ -281,7 +281,7 @@ impl SupervisionStrategy for strategy::NoSupervision {
 
 #[async_trait]
 impl SupervisionStrategy for strategy::OneToOne {
-    async fn handle_failure(pptr: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
+    async fn handle_failure(pptr: &Puppeteer, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
         Ok(pptr
             .send_command_by_pid(master, puppet, ServiceCommand::Restart { stage: None })
             .await?)
@@ -290,7 +290,11 @@ impl SupervisionStrategy for strategy::OneToOne {
 
 #[async_trait]
 impl SupervisionStrategy for strategy::OneForAll {
-    async fn handle_failure(pptr: &Puppeter, master: Pid, _puppet: Pid) -> Result<(), PuppetError> {
+    async fn handle_failure(
+        pptr: &Puppeteer,
+        master: Pid,
+        _puppet: Pid,
+    ) -> Result<(), PuppetError> {
         if let Some(puppets) = pptr.get_puppets_by_pid(master) {
             for pid in puppets.into_iter().rev() {
                 pptr.send_command_by_pid(master, pid, ServiceCommand::Restart { stage: None })
@@ -303,7 +307,7 @@ impl SupervisionStrategy for strategy::OneForAll {
 
 #[async_trait]
 impl SupervisionStrategy for strategy::RestForOne {
-    async fn handle_failure(pptr: &Puppeter, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
+    async fn handle_failure(pptr: &Puppeteer, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
         if let Some(puppets) = pptr.get_puppets_by_pid(master) {
             let mut restart_next = false;
             for pid in puppets.into_iter().rev() {

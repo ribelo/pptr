@@ -18,7 +18,7 @@ use crate::{
 
 /// The `Executor` trait defines the execution strategy for handling messages in a puppet.
 ///
-/// It provides an `execute` method that takes a mutable reference to the puppet, the puppeter context,
+/// It provides an `execute` method that takes a mutable reference to the puppet, the Puppeteer context,
 /// the message to be handled, and an optional reply address for sending the response back to the sender.
 ///
 /// The trait is generic over the message type `E`, which must implement the `Message` trait.
@@ -29,7 +29,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Context,
+        Puppeteer: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -64,21 +64,21 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Context,
+        Puppeteer: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
     where
         P: Handler<E>,
     {
-        let pid = puppeter.pid;
-        let response = puppet.handle_message(msg, puppeter).await;
+        let pid = Puppeteer.pid;
+        let response = puppet.handle_message(msg, Puppeteer).await;
         if let Err(err) = &response {
-            puppeter.report_failure(puppet, err.clone()).await?;
+            Puppeteer.report_failure(puppet, err.clone()).await?;
         }
         if let Some(reply_address) = reply_address {
             if reply_address.send(response).is_err() {
-                return puppeter
+                return Puppeteer
                     .report_failure(
                         puppet,
                         PuppetError::critical(
@@ -100,7 +100,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Context,
+        Puppeteer: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -108,13 +108,13 @@ where
         P: Handler<E> + Clone,
     {
         let cloned_puppet = puppet.clone();
-        let cloned_puppeter = puppeter.clone();
+        let cloned_Puppeteer = Puppeteer.clone();
         tokio::spawn(async move {
             let mut local_puppet = cloned_puppet;
-            let mut local_puppeter = cloned_puppeter;
+            let mut local_Puppeteer = cloned_Puppeteer;
             let _result = SequentialExecutor::execute(
                 &mut local_puppet,
-                &mut local_puppeter,
+                &mut local_Puppeteer,
                 msg,
                 reply_address,
             )
@@ -298,7 +298,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        puppeter: &mut Context,
+        Puppeteer: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -306,13 +306,13 @@ where
         P: Handler<E> + Clone,
     {
         let cloned_puppet = puppet.clone();
-        let cloned_puppeter = puppeter.clone();
-        puppeter.pptr.executor.spawn(async move {
+        let cloned_Puppeteer = Puppeteer.clone();
+        Puppeteer.pptr.executor.spawn(async move {
             let mut local_puppet = cloned_puppet;
-            let mut local_puppeter = cloned_puppeter;
+            let mut local_Puppeteer = cloned_Puppeteer;
             let _result = SequentialExecutor::execute(
                 &mut local_puppet,
-                &mut local_puppeter,
+                &mut local_Puppeteer,
                 msg,
                 reply_address,
             )
