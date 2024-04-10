@@ -1354,25 +1354,21 @@ impl Puppeter {
 
     pub fn spawn_task<F, Fut, O>(&self, task: F) -> JoinHandle<O>
     where
-        F: FnOnce(&Self) -> Fut + Send + 'static,
+        F: FnOnce(Self) -> Fut + Send + 'static,
         Fut: Future<Output = O> + Send + 'static,
         O: Send + 'static,
     {
-        let cloned_self = self.clone();
-        tokio::spawn(task(&cloned_self))
+        tokio::spawn(task(self.clone()))
     }
 
     pub fn spawn_heavy_task<F, Fut, O>(&self, task: F) -> executor::Job<O>
     where
-        F: FnOnce(&Self) -> Fut + Send + 'static,
+        F: FnOnce(Self) -> Fut + Send + 'static,
         Fut: Future<Output = O> + Send + 'static,
         O: Send + 'static,
     {
         let cloned_self = self.clone();
-        self.executor.spawn(async move {
-            let cloned_self = cloned_self;
-            task(&cloned_self).await
-        })
+        self.executor.spawn(async move { task(cloned_self).await })
     }
 }
 
