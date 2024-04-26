@@ -139,11 +139,9 @@ where
     async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context<P>) {
         if let Some(msg) = self.message.take() {
             let reply_address = self.reply_address.take();
-            dbg!("4");
             if let Err(err) =
                 <P as Handler<E>>::Executor::execute(puppet, ctx, msg, reply_address).await
             {
-                dbg!("5");
                 self.reply_error(ctx, err).await;
             }
         } else {

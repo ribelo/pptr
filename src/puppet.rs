@@ -38,9 +38,14 @@ pub trait Puppet: Send + Sync + Sized + Clone + 'static {
     /// of the puppet on success, or a `CriticalError` if the reset operation fails.
     ///
     /// The default implementation clones the current instance of the puppet.
-    fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
-        warn!(puppet = %ctx.pid, "Resetting puppet");
-        Ok(self.clone())
+    fn reset(
+        &self,
+        ctx: &Context<Self>,
+    ) -> impl Future<Output = Result<Self, CriticalError>> + Send {
+        async {
+            warn!(puppet = %ctx.pid, "Resetting puppet");
+            Ok(self.clone())
+        }
     }
 
     /// Initializes the puppet.
@@ -50,9 +55,14 @@ pub trait Puppet: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation logs a debug message indicating that the puppet is
     /// being initialized.
-    fn on_init(&mut self, ctx: &Context<Self>) -> Result<(), PuppetError> {
-        tracing::debug!(puppet = %ctx.pid, "Initializing puppet");
-        Ok(())
+    fn on_init(
+        &mut self,
+        ctx: &Context<Self>,
+    ) -> impl Future<Output = Result<(), PuppetError>> + Send {
+        async {
+            tracing::debug!(puppet = %ctx.pid, "Initializing puppet");
+            Ok(())
+        }
     }
 
     /// Starts the puppet.
@@ -62,9 +72,14 @@ pub trait Puppet: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation logs a debug message indicating that the puppet is
     /// being started.
-    fn on_start(&mut self, ctx: &Context<Self>) -> Result<(), PuppetError> {
-        tracing::debug!(puppet = %ctx.pid, "Starting puppet" );
-        Ok(())
+    fn on_start(
+        &mut self,
+        ctx: &Context<Self>,
+    ) -> impl Future<Output = Result<(), PuppetError>> + Send {
+        async {
+            tracing::debug!(puppet = %ctx.pid, "Starting puppet" );
+            Ok(())
+        }
     }
 
     /// Stops the puppet.
@@ -74,9 +89,14 @@ pub trait Puppet: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation logs a debug message indicating that the puppet is
     /// being stopped.
-    fn on_stop(&mut self, ctx: &Context<Self>) -> Result<(), PuppetError> {
-        tracing::debug!(puppet = %ctx.pid, "Stopping puppet");
-        Ok(())
+    fn on_stop(
+        &mut self,
+        ctx: &Context<Self>,
+    ) -> impl Future<Output = Result<(), PuppetError>> + Send {
+        async {
+            tracing::debug!(puppet = %ctx.pid, "Stopping puppet");
+            Ok(())
+        }
     }
 }
 
@@ -168,7 +188,7 @@ impl<T: Puppet> Context<T> {
 
             if !on_start_done {
                 // Perform the `on_start` function which initializes the puppet service.
-                match puppet.on_start(self) {
+                match puppet.on_start(self).await {
                     Ok(()) | Err(PuppetError::NonCritical(_)) => {
                         // If `on_start` succeeds or returns a non-critical error, set the status
                         // to `Active` and mark `on_start_done` as `true`.
@@ -273,7 +293,7 @@ impl<T: Puppet> Context<T> {
             }
 
             if !on_stop_done {
-                match puppet.on_stop(self) {
+                match puppet.on_stop(self).await {
                     Ok(()) | Err(PuppetError::NonCritical(_)) => {
                         // If `on_stop` succeeds or returns a non-critical error, set the status
                         // to `Inactive` and mark `on_stop_done` as `true`.
@@ -318,7 +338,7 @@ impl<T: Puppet> Context<T> {
     {
         self.stop(puppet, true).await?;
         // Reset state
-        *puppet = puppet.reset(self)?;
+        *puppet = puppet.reset(self).await?;
         self.start(puppet, true).await?;
         Ok(())
     }
