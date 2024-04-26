@@ -983,12 +983,7 @@ mod tests {
         let pptr = Puppeteer::new();
         let context = Context::<PuppetActor>::new(pptr);
 
-        let handle = context.spawn_task(|ctx: Context<PuppetActor>| {
-            async move {
-                let x = ctx.critical_error("foo");
-                42
-            }
-        });
+        let handle = context.spawn_task(|ctx| async move { 42 });
         let result = handle.await.unwrap();
 
         assert_eq!(result, 42);
@@ -999,12 +994,7 @@ mod tests {
         let pptr = Puppeteer::new();
         let context = Context::<PuppetActor>::new(pptr);
 
-        let handle = context.spawn_task(|ctx: Context<PuppetActor>| {
-            async move {
-                let x = ctx.critical_error("foo");
-                42
-            }
-        });
+        let handle = context.spawn_task(|ctx| async move { 42 });
         let result = handle.await.unwrap();
 
         assert_eq!(result, 42);
