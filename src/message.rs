@@ -244,7 +244,7 @@ impl ServicePacket {
         let response = ctx.handle_command(puppet, cmd).await;
 
         if let Err(PuppetError::Critical(err)) = &response {
-            ctx.report_failure(puppet, err.clone().into()).await?;
+            ctx.report_failure(puppet, err.clone()).await?;
         }
 
         reply_address.send(response).map_err(|_err| {

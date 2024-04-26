@@ -15,7 +15,7 @@ use crate::{
     message::{Mailbox, Message, RestartStage, ServiceCommand, ServiceMailbox},
     pid::Pid,
     puppeteer::Puppeteer,
-    supervision::{RetryConfig, RetryConfigBuilder, SupervisionStrategy},
+    supervision::SupervisionStrategy,
 };
 
 /// A trait that manages the entire lifecycle of puppets (actors) in an actor model.
@@ -112,19 +112,17 @@ pub enum PuppetStatus {
 pub struct Context<P: Puppet> {
     pub pid: Pid,
     pub(crate) pptr: Puppeteer,
-    pub(crate) retry_config: RetryConfig,
     _phantom: std::marker::PhantomData<P>,
 }
 
 impl<T: Puppet> Context<T> {
-    pub(crate) fn new(pptr: Puppeteer, retry_config: RetryConfig) -> Self
+    pub(crate) fn new(pptr: Puppeteer) -> Self
     where
         T: Puppet,
     {
         Self {
             pid: Pid::new::<T>(),
             pptr,
-            retry_config,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -178,21 +176,13 @@ impl<T: Puppet> Context<T> {
                         on_start_done = true;
                         self.set_status(PuppetStatus::Active);
                     }
-                    Err(PuppetError::Critical(_)) => {
-                        if self.retry_config.increment_retry().is_err() {
-                            let error = self.critical_error("Max retry reached during start");
-                            // If the maximum retry attempts are reached during `start_all_puppets`
-                            // Mark the tree as poisoned.
-                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(self.critical_error(&err));
-                            }
-                            // And return a fatal error indicating the failure.
-                            return Err(error);
+                    Err(PuppetError::Critical(error)) => {
+                        // Mark the tree as poisoned.
+                        if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                            return Err(self.critical_error(&err));
                         }
-                        // Increment the retry count, wait according to the retry config, and
-                        // continue to the next iteration of the loop.
-                        self.retry_config.maybe_wait().await;
-                        continue;
+                        // And return a fatal error indicating the failure.
+                        return Err(error.into());
                     }
                 }
             }
@@ -206,21 +196,13 @@ impl<T: Puppet> Context<T> {
                         // `start_all_puppets_done` as `true`.
                         start_all_puppets_done = true;
                     }
-                    Err(PuppetError::Critical(_)) => {
-                        if self.retry_config.increment_retry().is_err() {
-                            let error = self.critical_error("Max retry reached during start");
-                            // If the maximum retry attempts are reached during `start_all_puppets`
-                            // Mark the tree as poisoned.
-                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(self.critical_error(&err));
-                            }
-                            // And return a fatal error indicating the failure.
-                            return Err(error);
+                    Err(PuppetError::Critical(error)) => {
+                        // Mark the tree as poisoned.
+                        if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                            return Err(self.critical_error(&err));
                         }
-                        // Increment the retry count, wait according to the retry config, and
-                        // continue to the next iteration of the loop.
-                        self.retry_config.maybe_wait().await;
-                        continue;
+                        // And return a fatal error indicating the failure.
+                        return Err(error.into());
                     }
                 }
             }
@@ -280,21 +262,13 @@ impl<T: Puppet> Context<T> {
             if !stop_all_puppets_done {
                 match self.stop_all_puppets(&service_command).await {
                     Ok(()) | Err(PuppetError::NonCritical(_)) => stop_all_puppets_done = true,
-                    Err(PuppetError::Critical(_)) => {
-                        if self.retry_config.increment_retry().is_err() {
-                            let error = self.critical_error("Max retry reached during stop");
-                            // If the maximum retry attempts are reached during `stop_all_puppets`,
-                            // Mark tree as poisoned.
-                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(self.critical_error(&err));
-                            };
-                            // And return a fatal error indicating the failure.
-                            return Err(error);
+                    Err(PuppetError::Critical(error)) => {
+                        // Mark the tree as poisoned.
+                        if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                            return Err(self.critical_error(&err));
                         }
-                        // Increment the retry count, wait according to the retry config, and
-                        // continue to the next iteration of the loop.
-                        self.retry_config.maybe_wait().await;
-                        continue;
+                        // And return a fatal error indicating the failure.
+                        return Err(error.into());
                     }
                 }
             }
@@ -307,21 +281,13 @@ impl<T: Puppet> Context<T> {
                         on_stop_done = true;
                         self.set_status(PuppetStatus::Inactive);
                     }
-                    Err(PuppetError::Critical(_)) => {
-                        if self.retry_config.increment_retry().is_err() {
-                            let error = self.critical_error("Max retry reached during stop");
-                            // If the maximum retry attempts are reached during `on_stop`,
-                            // Mark tree as poisoned.
-                            if let Err(err) = self.report_failure(puppet, error.clone()).await {
-                                return Err(self.critical_error(&err));
-                            };
-                            // And return a fatal error indicating the failure.
-                            return Err(error);
+                    Err(PuppetError::Critical(error)) => {
+                        // Mark the tree as poisoned.
+                        if let Err(err) = self.report_failure(puppet, error.clone()).await {
+                            return Err(self.critical_error(&err));
                         }
-                        // Increment the retry count, wait according to the retry config, and
-                        // continue to the next iteration of the loop.
-                        self.retry_config.maybe_wait().await;
-                        continue;
+                        // And return a fatal error indicating the failure.
+                        return Err(error.into());
                     }
                 }
             }
@@ -532,12 +498,12 @@ impl<T: Puppet> Context<T> {
     pub async fn report_failure(
         &self,
         puppet: &mut T,
-        error: PuppetError,
+        error: impl Into<PuppetError> + Send + 'static,
     ) -> Result<(), PuppetError>
     where
         T: Puppet,
     {
-        dbg!("3");
+        let error = error.into();
         if matches!(error, PuppetError::NonCritical(_)) {
             debug!(error = %error, "Non critical error reported");
             return Ok(());
@@ -592,7 +558,7 @@ impl<T: Puppet> Context<T> {
                         PuppetError::NonCritical(_) => {}
                         PuppetError::Critical(err) => {
                             // If the restart command fails, report the failure to the master.
-                            let _ = self.report_failure(puppet, err.into()).await;
+                            let _ = self.report_failure(puppet, err).await;
                         }
                     }
                 }
@@ -834,7 +800,7 @@ impl<T: Puppet> Context<T> {
             for pid in puppets.iter().rev() {
                 // Attempt to send the stop command to the current puppet.
                 if let Err(error) = self.send_command_by_pid(*pid, ServiceCommand::Fail).await {
-                    if let Err(err) = self.report_failure(puppet, error.into()).await {
+                    if let Err(err) = self.report_failure(puppet, error).await {
                         return Err(self.critical_error(&err));
                     }
                 }
@@ -1008,145 +974,6 @@ where
     pub(crate) command_rx: ServiceMailbox,
 }
 
-/// A builder for creating and configuring a puppet.
-///
-/// The `PuppetBuilder` struct allows for the creation and configuration of a puppet instance.
-/// It provides methods to set various options such as the message buffer size, command buffer size,
-/// and retry configuration.
-///
-/// The generic parameter `P` specifies the type of the puppet and must implement the `Puppet`
-/// trait.
-///
-/// # Fields
-///
-/// - `pid`: The process ID (`Pid`) of the puppet.
-/// - `puppet`: An optional instance of the puppet of type `P`.
-/// - `messages_buffer_size`: The buffer size for the puppet's message mailbox, represented as a `NonZeroUsize`.
-/// - `commands_buffer_size`: The buffer size for the puppet's command mailbox, represented as a `NonZeroUsize`.
-/// - `retry_config`: An optional `RetryConfig` specifying the retry behavior for the puppet.
-/// - `pptr`: An optional reference to the `Puppeteer` instance associated with the puppet.
-///
-/// # Example
-///
-/// ```rust
-/// use pptr::prelude::*;
-///
-/// #[derive(Debug, Default, Clone)]
-/// struct SomePuppet;
-///
-/// impl Puppet for SomePuppet {
-///     type Supervision = OneForAll;
-/// }
-///
-/// let pptr = Puppeteer::new();
-/// let builder = PuppetBuilder::new(SomePuppet::default(), pptr);
-/// ```
-///
-/// # Safety
-///
-/// This method uses `unsafe` to create `NonZeroUsize` values for the message and command buffer sizes.
-/// It is safe because the values are known to be non-zero at compile time.
-#[derive(Debug)]
-pub struct PuppetBuilder<P>
-where
-    P: Puppet,
-{
-    pub pid: Pid,
-    pub puppet: Option<P>,
-    pub messages_buffer_size: NonZeroUsize,
-    pub commands_buffer_size: NonZeroUsize,
-    pub retry_config: Option<RetryConfig>,
-    pub pptr: Option<Puppeteer>,
-}
-
-impl<P> PuppetBuilder<P>
-where
-    P: Puppet,
-{
-    /// Creates a new `PuppetBuilder` with the provided puppet state.
-    ///
-    /// This method initializes a new `PuppetBuilder` instance with default values for the
-    /// message buffer size, command buffer size, and retry configuration.
-    #[must_use]
-    pub fn new(puppet: P, pptr: Puppeteer) -> Self {
-        Self {
-            pid: Pid::new::<P>(),
-            puppet: Some(puppet),
-            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
-            messages_buffer_size: unsafe { NonZeroUsize::new_unchecked(1024) },
-            // SAFETY: NonZeroUsize::new_unchecked is safe because the value is known to be non-zero
-            commands_buffer_size: unsafe { NonZeroUsize::new_unchecked(16) },
-            retry_config: Some(RetryConfigBuilder::default().build()),
-            pptr: Some(pptr),
-        }
-    }
-
-    /// Sets the message buffer size for the puppet.
-    ///
-    /// This method allows configuring the size of the message buffer used by the puppet.
-    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
-    /// the updated `PuppetBuilder` instance.
-    #[must_use]
-    pub fn with_messages_bufer_size(mut self, size: NonZeroUsize) -> Self {
-        self.messages_buffer_size = size;
-        self
-    }
-
-    /// Sets the command buffer size for the puppet.
-    ///
-    /// This method allows configuring the size of the command buffer used by the puppet.
-    /// It takes a `NonZeroUsize` value representing the desired buffer size and returns
-    /// the updated `PuppetBuilder` instance.
-    #[must_use]
-    pub fn with_commands_bufer_size(mut self, size: NonZeroUsize) -> Self {
-        self.commands_buffer_size = size;
-        self
-    }
-
-    /// Spawns an independent puppet (actor) on the `pptr` runtime.
-    ///
-    /// This method spawns a puppet without a manager, making it independent. It takes a reference
-    /// to the `Puppeteer` runtime and returns a `Result` containing the `Address` of the spawned
-    /// puppet on success, or a `PuppetError` on failure.
-    pub async fn spawn(mut self) -> Result<Address<P>, PuppetError>
-    where
-        P: Puppet,
-    {
-        let pptr = self.pptr.take().unwrap();
-        pptr.spawn_puppet_by_pid(self, Pid::new::<P>()).await
-    }
-
-    /// Spawns a puppet (actor) with a manager on the `pptr` runtime.
-    ///
-    /// This method spawns a puppet `P` with a manager `M`. It takes a reference to the `Puppeteer`
-    /// runtime and returns a `Result` containing the `Address` of the spawned puppet on success,
-    /// or a `PuppetError` on failure.
-    pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
-    where
-        P: Puppet,
-        M: Puppet,
-    {
-        let pptr = self.pptr.take().unwrap();
-        pptr.spawn_puppet_by_pid(self, Pid::new::<M>()).await
-    }
-
-    /// Spawns a puppet (actor) with a specified master PID on the `pptr` runtime.
-    ///
-    /// This method spawns a puppet `P` with the provided `master_pid`. It takes ownership of the
-    /// `Puppeteer` runtime and returns a `Result` containing the `Address` of the spawned puppet on
-    /// success, or a `PuppetError` on failure.
-    pub(crate) async fn spawn_link_by_pid(
-        mut self,
-        master_pid: Pid,
-    ) -> Result<Address<P>, PuppetError>
-    where
-        P: Puppet,
-    {
-        let pptr = self.pptr.take().unwrap();
-        pptr.spawn_puppet_by_pid(self, master_pid).await
-    }
-}
-
 #[allow(dead_code, unused_imports)]
 #[cfg(test)]
 mod tests {
@@ -1168,8 +995,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_task() {
         let pptr = Puppeteer::new();
-        let retry_config = RetryConfig::default();
-        let context = Context::<PuppetActor>::new(pptr, retry_config);
+        let context = Context::<PuppetActor>::new(pptr);
 
         let handle = context.spawn_task(|ctx: Context<PuppetActor>| {
             async move {
@@ -1185,8 +1011,7 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_heavy_task() {
         let pptr = Puppeteer::new();
-        let retry_config = RetryConfig::default();
-        let context = Context::<PuppetActor>::new(pptr, retry_config);
+        let context = Context::<PuppetActor>::new(pptr);
 
         let handle = context.spawn_task(|ctx: Context<PuppetActor>| {
             async move {

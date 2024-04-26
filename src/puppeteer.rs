@@ -28,7 +28,7 @@ use crate::{
     },
     pid::{Id, Pid},
     prelude::CriticalError,
-    puppet::{Context, Handler, Puppet, PuppetBuilder, PuppetHandle, PuppetStatus, ResponseFor},
+    puppet::{Context, Handler, Puppet, PuppetHandle, PuppetStatus, ResponseFor},
 };
 
 pub type BoxedAny = Box<dyn Any + Send + Sync>;
@@ -972,7 +972,7 @@ impl Puppeteer {
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
     pub(crate) async fn spawn_puppet_by_pid<P>(
         &self,
-        mut builder: PuppetBuilder<P>,
+        mut puppet: P,
         master_pid: Pid,
     ) -> Result<Address<P>, PuppetError>
     where
@@ -983,7 +983,6 @@ impl Puppeteer {
             return Err(PuppetDoesNotExistError::new(master_pid).into());
         }
 
-        let mut puppet = builder.puppet.take().unwrap();
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<PuppetStatus>(PuppetStatus::Inactive);
         let (message_tx, message_rx) =
@@ -999,9 +998,8 @@ impl Puppeteer {
             status_tx,
             status_rx.clone(),
         )?;
-        let retry_config = builder.retry_config.take().unwrap_or_default();
 
-        let puppeteer = Context::<P>::new(self.clone(), retry_config);
+        let ctx = Context::<P>::new(self.clone());
 
         let handle = PuppetHandle {
             status_rx: status_rx.clone(),
@@ -1016,10 +1014,10 @@ impl Puppeteer {
             pptr: self.clone(),
         };
 
-        puppet.on_init(&puppeteer).await?;
-        puppeteer.start(&mut puppet, false).await?;
+        puppet.on_init(&ctx).await?;
+        ctx.start(&mut puppet, false).await?;
 
-        tokio::spawn(run_puppet_loop(puppet, puppeteer, handle));
+        tokio::spawn(run_puppet_loop(puppet, ctx, handle));
         Ok(address)
     }
 
