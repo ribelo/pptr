@@ -6,7 +6,6 @@ use std::{
     future::Future,
     hash::BuildHasherDefault,
     num::NonZeroUsize,
-    pin::Pin,
     sync::{Arc, Mutex},
 };
 use tokio::{
@@ -1963,53 +1962,51 @@ mod tests {
         panic!("Unrecoverable error encountered: {result:?}");
     }
 
-    // #[tokio::test]
-    // async fn test_puppet_self_send_msg() {
-    //     #[derive(Debug, Clone, Default)]
-    //     struct SelfSendPuppet {
-    //         i: i32,
-    //     }
-    //
-    //     #[derive(Debug)]
-    //     struct SelfSendMessage;
-    //
-    //     #[async_trait]
-    //     impl Puppet for SelfSendPuppet {
-    //         type Supervision = OneForAll;
-    //     }
-    //
-    //     #[async_trait]
-    //     impl Handler<SelfSendMessage> for SelfSendPuppet {
-    //         type Response = i32;
-    //
-    //         type Executor = ConcurrentExecutor;
-    //
-    //         async fn handle_message(
-    //             &mut self,
-    //             msg: SelfSendMessage,
-    //             ctx: &Context<Self>,
-    //         ) -> Result<Self::Response, PuppetError> {
-    //             if self.i < 10 {
-    //                 self.i += 1;
-    //                 Ok(ctx.ask::<SelfSendPuppet, _>(SelfSendMessage).await?)
-    //             } else {
-    //                 Ok(self.i)
-    //             }
-    //         }
-    //     }
-    //
-    //     let pptr = Puppeteer::new();
-    //
-    //     let res = pptr.spawn_self(SelfSendPuppet { i: 0 }).await;
-    //     assert!(res.is_ok());
-    //
-    //     pptr.send::<SelfSendPuppet, _>(SelfSendMessage)
-    //         .await
-    //         .unwrap();
-    //
-    //     let result = pptr.wait_for_unrecoverable_failure().await;
-    //     panic!("Unrecoverable error encountered: {result:?}");
-    // }
+    #[tokio::test]
+    async fn test_puppet_self_send_msg() {
+        #[derive(Debug, Clone, Default)]
+        struct SelfSendPuppet {
+            i: i32,
+        }
+
+        #[derive(Debug)]
+        struct SelfSendMessage;
+
+        #[async_trait]
+        impl Puppet for SelfSendPuppet {
+            type Supervision = OneForAll;
+        }
+
+        #[async_trait]
+        impl Handler<SelfSendMessage> for SelfSendPuppet {
+            type Response = i32;
+
+            type Executor = SequentialExecutor;
+
+            async fn handle_message(
+                &mut self,
+                msg: SelfSendMessage,
+                ctx: &Context<Self>,
+            ) -> Result<Self::Response, PuppetError> {
+                if self.i < 10 {
+                    dbg!(self.i);
+                    self.i += 1;
+                    Ok(ctx.ask::<SelfSendPuppet, _>(SelfSendMessage).await?)
+                } else {
+                    dbg!("finish");
+                    Ok(self.i)
+                }
+            }
+        }
+
+        let pptr = Puppeteer::new();
+
+        let res = pptr.spawn_self(SelfSendPuppet { i: 0 }).await;
+        assert!(res.is_ok());
+
+        pptr.send::<SelfSendPuppet, _>(SelfSendMessage).unwrap();
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
 
     // #[tokio::test]
     // #[should_panic(expected = "Unrecoverable error encountered")]

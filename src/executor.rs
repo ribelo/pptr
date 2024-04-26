@@ -100,7 +100,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        Puppeteer: &mut Context<P>,
+        ctx: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -108,13 +108,13 @@ where
         P: Handler<E> + Clone,
     {
         let cloned_puppet = puppet.clone();
-        let cloned_Puppeteer = Puppeteer.clone();
+        let cloned_ctx = ctx.clone();
         tokio::spawn(async move {
             let mut local_puppet = cloned_puppet;
-            let mut local_Puppeteer = cloned_Puppeteer;
+            let mut local_puppeteer = cloned_ctx;
             let _result = SequentialExecutor::execute(
                 &mut local_puppet,
-                &mut local_Puppeteer,
+                &mut local_puppeteer,
                 msg,
                 reply_address,
             )
@@ -298,7 +298,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        Puppeteer: &mut Context<P>,
+        ctx: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -306,17 +306,13 @@ where
         P: Handler<E> + Clone,
     {
         let cloned_puppet = puppet.clone();
-        let cloned_Puppeteer = Puppeteer.clone();
-        Puppeteer.pptr.executor.spawn(async move {
+        let cloned_pptr = ctx.clone();
+        ctx.pptr.executor.spawn(async move {
             let mut local_puppet = cloned_puppet;
-            let mut local_Puppeteer = cloned_Puppeteer;
-            let _result = SequentialExecutor::execute(
-                &mut local_puppet,
-                &mut local_Puppeteer,
-                msg,
-                reply_address,
-            )
-            .await;
+            let mut local_pptr = cloned_pptr;
+            let _result =
+                SequentialExecutor::execute(&mut local_puppet, &mut local_pptr, msg, reply_address)
+                    .await;
         });
         Ok(())
     }

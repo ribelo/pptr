@@ -1,4 +1,4 @@
-use std::{future::Future, num::NonZeroUsize};
+use std::future::Future;
 
 use async_recursion::async_recursion;
 use async_trait::async_trait;
@@ -492,13 +492,10 @@ impl<T: Puppet> Context<T> {
     ///
     /// Returns a `PuppetError` if the failure reporting fails or if the puppet's master does not exist.
     #[async_recursion]
-    pub async fn report_failure(
-        &self,
-        puppet: &mut T,
-        error: impl Into<PuppetError> + Send + 'static,
-    ) -> Result<(), PuppetError>
+    pub async fn report_failure<E>(&self, puppet: &mut T, error: E) -> Result<(), PuppetError>
     where
         T: Puppet,
+        E: Into<PuppetError> + Send + 'static,
     {
         let error = error.into();
         if matches!(error, PuppetError::NonCritical(_)) {
@@ -983,7 +980,7 @@ mod tests {
         let pptr = Puppeteer::new();
         let context = Context::<PuppetActor>::new(pptr);
 
-        let handle = context.spawn_task(|ctx| async move { 42 });
+        let handle = context.spawn_task(|_ctx| async move { 42 });
         let result = handle.await.unwrap();
 
         assert_eq!(result, 42);
@@ -994,7 +991,7 @@ mod tests {
         let pptr = Puppeteer::new();
         let context = Context::<PuppetActor>::new(pptr);
 
-        let handle = context.spawn_task(|ctx| async move { 42 });
+        let handle = context.spawn_task(|_ctx| async move { 42 });
         let result = handle.await.unwrap();
 
         assert_eq!(result, 42);
