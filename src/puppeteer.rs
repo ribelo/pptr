@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use tokio::{
-    sync::{mpsc, watch},
+    sync::{mpsc, oneshot, watch},
     task::JoinHandle,
 };
 
@@ -86,8 +86,8 @@ pub struct Puppeteer {
     pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
     pub(crate) resources: Arc<Mutex<FxHashMap<Id, Arc<Mutex<BoxedAny>>>>>,
     pub(crate) executor: DedicatedExecutor,
-    pub(crate) failure_tx: mpsc::UnboundedSender<CriticalError>,
-    pub(crate) failure_rx: Arc<AtomicTake<mpsc::UnboundedReceiver<CriticalError>>>,
+    pub(crate) failure_tx: Arc<AtomicTake<oneshot::Sender<CriticalError>>>,
+    pub(crate) failure_rx: Arc<AtomicTake<oneshot::Receiver<CriticalError>>>,
 }
 
 impl Default for Puppeteer {
@@ -128,7 +128,7 @@ impl Puppeteer {
             puppet_to_master: Arc::default(),
             resources: Arc::default(),
             executor,
-            failure_tx: tx,
+            failure_tx: Arc::new(AtomicTake::new(tx)),
             failure_rx: Arc::new(AtomicTake::new(rx)),
         }
     }
@@ -164,8 +164,8 @@ impl Puppeteer {
         F: FnOnce(Puppeteer, CriticalError) -> Fut + Send,
         Fut: Future<Output = ()> + Send,
     {
-        if let Some(mut rx) = self.failure_rx.take() {
-            if let Some(err) = rx.recv().await {
+        if let Some(rx) = self.failure_rx.take() {
+            if let Ok(err) = rx.await {
                 f(self.clone(), err).await;
             }
         }
@@ -204,7 +204,7 @@ impl Puppeteer {
     /// Panics if the internal mechanism for receiving critical errors is not initialized or if
     /// receiving fails.
     pub async fn wait_for_unrecoverable_failure(self) -> CriticalError {
-        self.failure_rx.take().unwrap().recv().await.unwrap()
+        self.failure_rx.take().unwrap().await.unwrap()
     }
 
     /// Registers a puppet within the system with all necessary data.
