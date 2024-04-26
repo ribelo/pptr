@@ -130,7 +130,7 @@
 //!         if msg.0 < 10 {
 //!             // By using 'ctx.send', the actor can send messages to other actors directly from the message handler,
 //!             // ensuring proper error propagation and potential supervision.
-//!             ctx.send::<PongActor, _>(Pong(msg.0 + 1)).await?;
+//!             ctx.send::<PongActor, _>(Pong(msg.0 + 1))?;
 //!         } else {
 //!             println!("Ping-Pong finished!");
 //!         }
@@ -164,7 +164,7 @@
 //!         println!("Pong received: {}", msg.0);
 //!
 //!         if msg.0 < 10 {
-//!             ctx.send::<PingActor, _>(Ping(msg.0 + 1)).await?;
+//!             ctx.send::<PingActor, _>(Ping(msg.0 + 1))?;
 //!         } else {
 //!             println!("Ping-Pong finished!");
 //!         }
@@ -188,7 +188,7 @@
 //!
 //!     // Send an initial 'Ping' message to 'PingActor' with a counter value of 0.
 //!     // This starts the ping-pong game between 'PingActor' and 'PongActor'.
-//!     pptr.send::<PingActor, _>(Ping(0)).await?;
+//!     pptr.send::<PingActor, _>(Ping(0))?;
 //!
 //!     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 //!

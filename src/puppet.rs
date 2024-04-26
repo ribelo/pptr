@@ -571,12 +571,12 @@ impl<T: Puppet> Context<T> {
     /// # Errors
     ///
     /// Returns a `PuppetSendMessageError` if the message fails to send or if the puppet does not exist.
-    pub async fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
+    pub fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
     where
         P: Handler<E>,
         E: Message,
     {
-        self.pptr.send::<P, E>(message).await
+        self.pptr.send::<P, E>(message)
     }
 
     /// Sends a message of type `E` to the puppet of type `P` and awaits a response.
@@ -609,17 +609,6 @@ impl<T: Puppet> Context<T> {
         E: Message,
     {
         self.pptr.ask_with_timeout::<P, E>(message, duration).await
-    }
-
-    /// Sends a message of type `E` to the puppet of type `P` without awaiting a response.
-    ///
-    /// This method sends the message asynchronously and does not wait for a response.
-    pub fn cast<P, E>(&self, message: E)
-    where
-        P: Handler<E>,
-        E: Message,
-    {
-        self.pptr.cast::<P, E>(message);
     }
 
     /// Sends a `ServiceCommand` to the puppet of type `P`.

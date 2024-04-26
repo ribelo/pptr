@@ -117,7 +117,7 @@ impl Puppeteer {
     /// Panics if it fails to determine the number of available CPU cores on the system.
     #[must_use]
     pub fn new() -> Self {
-        let (tx, rx) = mpsc::unbounded_channel();
+        let (tx, rx) = oneshot::channel();
         let cpus = NonZeroUsize::new(num_cpus::get()).expect("Failed to get number of CPUs");
         let executor = DedicatedExecutor::new(cpus);
         Self {
@@ -739,13 +739,13 @@ impl Puppeteer {
     /// # Panics
     ///
     /// Panics if the mutex lock is poisoned, indicating a failure in lock acquisition.
-    pub async fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
+    pub fn send<P, E>(&self, message: E) -> Result<(), PuppetSendMessageError>
     where
         P: Handler<E>,
         E: Message,
     {
         if let Some(postman) = self.get_postman::<P>() {
-            Ok(postman.send(message).await?)
+            Ok(postman.send(message)?)
         } else {
             Err(PuppetDoesNotExistError::new(Pid::new::<P>()).into())
         }
@@ -822,28 +822,6 @@ impl Puppeteer {
         } else {
             Err(PuppetDoesNotExistError::new(Pid::new::<P>()).into())
         }
-    }
-
-    /// Sends a message of type `E` to the puppet handler of type `P` without awaiting a response.
-    ///
-    /// This method sends a message to the puppet's message handler of the specified type
-    /// asynchronously, without awaiting a response. It spawns a new async task to handle
-    /// the send operation.
-    ///
-    /// # Example Usage
-    ///
-    /// ```ignore
-    /// pptr.cast::<Puppet, _>(MyMessage::new());
-    /// ```
-    pub fn cast<P, E>(&self, message: E)
-    where
-        P: Handler<E>,
-        E: Message,
-    {
-        let cloned_self = self.clone();
-        tokio::spawn(async move {
-            _ = cloned_self.send::<P, E>(message).await;
-        });
     }
 
     /// Sends a command to a puppet by its `Pid`, with the master's permission.
@@ -985,10 +963,8 @@ impl Puppeteer {
 
         let pid = Pid::new::<P>();
         let (status_tx, status_rx) = watch::channel::<PuppetStatus>(PuppetStatus::Inactive);
-        let (message_tx, message_rx) =
-            mpsc::channel::<Box<dyn Envelope<P>>>(builder.messages_buffer_size.get());
-        let (command_tx, command_rx) =
-            mpsc::channel::<ServicePacket>(builder.commands_buffer_size.get());
+        let (message_tx, message_rx) = mpsc::unbounded_channel::<Box<dyn Envelope<P>>>();
+        let (command_tx, command_rx) = mpsc::channel::<ServicePacket>(1);
         let postman = Postman::new(message_tx);
         let service_postman = ServicePostman::new(command_tx);
         self.register_puppet_by_pid::<P>(
@@ -1551,7 +1527,7 @@ mod tests {
         P: Puppet,
         M: Puppet,
     {
-        let (message_tx, _message_rx) = mpsc::channel::<Box<dyn Envelope<P>>>(1);
+        let (message_tx, _message_rx) = mpsc::unbounded_channel::<Box<dyn Envelope<P>>>();
         let (service_tx, _service_rx) = mpsc::channel::<ServicePacket>(1);
         let (status_tx, status_rx) = watch::channel::<PuppetStatus>(PuppetStatus::Inactive);
         let postman = Postman::new(message_tx);
@@ -1773,11 +1749,11 @@ mod tests {
         let res = pptr.spawn::<_, PuppetActor>(PuppetActor::default()).await;
         res.unwrap();
 
-        let res = pptr.send::<PuppetActor, PuppetMessage>(PuppetMessage).await;
+        let res = pptr.send::<PuppetActor, PuppetMessage>(PuppetMessage);
         res.unwrap();
 
         // Send without creating the puppet
-        let res = pptr.send::<MasterActor, MasterMessage>(MasterMessage).await;
+        let res = pptr.send::<MasterActor, MasterMessage>(MasterMessage);
         assert!(res.is_err());
     }
 
@@ -1844,9 +1820,9 @@ mod tests {
                 println!("Counter: {}", self.counter);
                 if self.counter < 10 {
                     self.counter += 1;
-                    ctx.send::<Self, _>(IncrementCounter).await?;
+                    ctx.send::<Self, _>(IncrementCounter)?;
                 } else {
-                    ctx.send::<Self, _>(DebugCounterPuppet).await?;
+                    ctx.send::<Self, _>(DebugCounterPuppet)?;
                 }
                 Ok(self.counter)
             }
@@ -1870,7 +1846,7 @@ mod tests {
 
         let pptr = Puppeteer::new();
         let address = pptr.spawn_self(CounterPuppet::default()).await.unwrap();
-        address.send(IncrementCounter).await.unwrap();
+        address.send(IncrementCounter).unwrap();
         // wait 1 second for the puppet to finish
         tokio::time::sleep(Duration::from_secs(1)).await;
         let x = address.ask(DebugCounterPuppet).await.unwrap();
@@ -2014,7 +1990,6 @@ mod tests {
         assert!(res.is_ok());
 
         pptr.send::<UnrecoverablePuppet, _>(UnrecoverableMessage)
-            .await
             .unwrap();
 
         let result = pptr.wait_for_unrecoverable_failure().await;

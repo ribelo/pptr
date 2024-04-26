@@ -296,7 +296,7 @@ pub struct Postman<P>
 where
     P: Puppet,
 {
-    tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>,
+    tx: tokio::sync::mpsc::UnboundedSender<Box<dyn Envelope<P>>>,
 }
 
 impl<P> Clone for Postman<P>
@@ -315,17 +315,17 @@ where
     P: Puppet,
 {
     #[must_use]
-    pub fn new(tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>) -> Self {
+    pub fn new(tx: tokio::sync::mpsc::UnboundedSender<Box<dyn Envelope<P>>>) -> Self {
         Self { tx }
     }
 
-    pub(crate) async fn send<E>(&self, message: E) -> Result<(), PostmanError>
+    pub(crate) fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
         P: Handler<E>,
         E: Message + 'static,
     {
         let packet = Packet::<P, E>::without_reply(message);
-        self.tx.send(Box::new(packet)).await.map_err(|_e| {
+        self.tx.send(Box::new(packet)).map_err(|_e| {
             PostmanError::SendError {
                 puppet: Pid::new::<P>(),
             }
@@ -346,7 +346,7 @@ where
             tokio::sync::oneshot::channel::<Result<ResponseFor<P, E>, PuppetError>>();
 
         let packet = Packet::<P, E>::with_reply(message, res_tx);
-        self.tx.send(Box::new(packet)).await.map_err(|_e| {
+        self.tx.send(Box::new(packet)).map_err(|_e| {
             PostmanError::SendError {
                 puppet: Pid::new::<P>(),
             }
@@ -440,7 +440,7 @@ pub(crate) struct Mailbox<P>
 where
     P: Puppet,
 {
-    rx: mpsc::Receiver<Box<dyn Envelope<P>>>,
+    rx: mpsc::UnboundedReceiver<Box<dyn Envelope<P>>>,
 }
 
 impl<P> fmt::Debug for Mailbox<P>
@@ -456,7 +456,7 @@ impl<P> Mailbox<P>
 where
     P: Puppet,
 {
-    pub fn new(rx: mpsc::Receiver<Box<dyn Envelope<P>>>) -> Self {
+    pub fn new(rx: mpsc::UnboundedReceiver<Box<dyn Envelope<P>>>) -> Self {
         Self { rx }
     }
     pub async fn recv(&mut self) -> Option<Box<dyn Envelope<P>>> {

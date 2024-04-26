@@ -108,12 +108,12 @@ where
     /// ```ignore
     /// let result = address.send(MyMessage::new()).await;
     /// ```
-    pub async fn send<E>(&self, message: E) -> Result<(), PostmanError>
+    pub fn send<E>(&self, message: E) -> Result<(), PostmanError>
     where
         S: Handler<E>,
         E: Message + 'static,
     {
-        self.message_tx.send::<E>(message).await
+        self.message_tx.send::<E>(message)
     }
 
     /// Sends a message of type `E` to the puppet and awaits a response.
@@ -263,7 +263,7 @@ mod tests {
 
         let pptr = Puppeteer::new();
         let address = pptr.spawn_self(TestAddressPuppet).await.unwrap();
-        assert!(address.send(TestMessage).await.is_ok());
+        assert!(address.send(TestMessage).is_ok());
     }
 
     #[tokio::test]
