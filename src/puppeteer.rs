@@ -895,9 +895,8 @@ impl Puppeteer {
         P: Puppet,
         M: Puppet,
     {
-        self.puppet_builder::<P>(puppet)
-            .spawn_link_by_pid(Pid::new::<M>())
-            .await
+        let master_pid = Pid::new::<M>();
+        self.spawn_puppet_by_pid(puppet, master_pid).await
     }
 
     /// Spawns a new independent puppet and links it to itself.
@@ -995,38 +994,6 @@ impl Puppeteer {
 
         tokio::spawn(run_puppet_loop(puppet, ctx, handle));
         Ok(address)
-    }
-
-    /// Creates a new `PuppetBuilder` for the specified puppet type `P`.
-    ///
-    /// This method returns a `PuppetBuilder` instance associated with the current `Puppeteer`.
-    /// The generic parameter `P` specifies the type of the puppet and must implement the `Puppet`
-    /// trait.
-    ///
-    /// # Returns
-    ///
-    /// A new `PuppetBuilder` instance for the specified puppet type `P`.
-    ///
-    /// # Example
-    ///
-    /// ```rust
-    /// use pptr::prelude::*;
-    ///
-    /// #[derive(Debug, Default, Clone)]
-    /// struct SomePuppet;
-    ///
-    /// impl Puppet for SomePuppet {
-    ///     type Supervision = OneForAll;
-    /// }
-    ///
-    /// let pptr = Puppeteer::new();
-    /// let builder = pptr.puppet_builder(SomePuppet::default());
-    #[must_use]
-    pub fn puppet_builder<P>(&self, puppet: P) -> PuppetBuilder<P>
-    where
-        P: Puppet,
-    {
-        PuppetBuilder::new(puppet, self.clone())
     }
 
     /// Adds a new resource to the resource collection.

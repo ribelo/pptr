@@ -218,7 +218,6 @@ pub mod prelude {
     pub use crate::puppet::Context;
     pub use crate::puppet::Handler;
     pub use crate::puppet::Puppet;
-    pub use crate::puppet::PuppetBuilder;
     pub use crate::puppet::Puppetable;
     pub use crate::puppeteer::Puppeteer;
     pub use crate::supervision::strategy::*;

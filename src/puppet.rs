@@ -463,10 +463,7 @@ impl<T: Puppet> Context<T> {
     where
         P: Puppet,
     {
-        self.pptr
-            .puppet_builder::<P>(puppet)
-            .spawn_link_by_pid(self.pid)
-            .await
+        self.pptr.spawn_puppet_by_pid(puppet, self.pid).await
     }
 
     /// Reports an unrecoverable failure.
