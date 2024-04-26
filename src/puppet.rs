@@ -475,10 +475,10 @@ impl<T: Puppet> Context<T> {
     ///
     /// Panics if sending the failure to the channel fails.
     pub fn report_unrecoverable_failure(&self, error: CriticalError) {
-        self.pptr
-            .failure_tx
-            .send(error)
-            .expect("Failed to report unrecoverable failure");
+        if let Some(tx) = self.pptr.failure_tx.take() {
+            tx.send(error)
+                .expect("Failed to report unrecoverable failure");
+        }
     }
 
     /// Reports a failure to the puppet's master.
