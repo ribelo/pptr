@@ -153,10 +153,10 @@ impl Puppeteer {
     ///
     /// # let pptr = Puppeteer::new();
     /// pptr.on_unrecoverable_failure(|pptr, error| {
-    ///     Box::pin(async move {
+    ///     async move {
     ///         println!("Unrecoverable error encountered: {:?}", error);
     ///         // Application cleanup and termination logic here
-    ///     })
+    ///     }
     /// });
     /// ```
     ///
@@ -164,14 +164,10 @@ impl Puppeteer {
     ///
     /// This method does not panic by itself, but the user-supplied callback function can panic if
     /// not properly handled.
-    pub async fn on_unrecoverable_failure<F>(&self, f: F)
+    pub async fn on_unrecoverable_failure<F, Fut>(&self, f: F)
     where
-        F: FnOnce(
-                Puppeteer,
-                CriticalError,
-            ) -> Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>
-            + Send
-            + 'static,
+        F: FnOnce(Puppeteer, CriticalError) -> Fut + Send,
+        Fut: Future<Output = ()> + Send,
     {
         if let Some(mut rx) = self.failure_rx.take() {
             if let Some(err) = rx.recv().await {
@@ -1919,5 +1915,160 @@ mod tests {
         }
         assert!(success);
         tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_unrecoverable_failure() {
+        let pptr = Puppeteer::new();
+
+        // Spawn a master actor that will fail after 3 attempts
+        let res = pptr.spawn_self(MasterActor::default()).await;
+        assert!(res.is_ok());
+
+        // Send failing messages to trigger the unrecoverable failure
+        for _ in 0..3 {
+            let _ = pptr.ask::<MasterActor, _>(MasterFailingMessage).await;
+        }
+
+        // Wait for the unrecoverable failure
+        let err = pptr.wait_for_unrecoverable_failure().await;
+
+        // Verify the expected error details
+        assert_eq!(err.puppet, Pid::new::<MasterActor>());
+        assert_eq!(err.message, "Failed to reset MasterActor");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Unrecoverable error encountered")]
+    async fn test_wait_for_unrecoverable_failure_panic() {
+        let pptr = Puppeteer::new();
+
+        // Spawn a master actor that will fail after 3 attempts
+        let res = pptr.spawn_self(MasterActor::default()).await;
+        assert!(res.is_ok());
+
+        // Send failing messages to trigger the unrecoverable failure
+        for _ in 0..3 {
+            let _ = pptr.ask::<MasterActor, _>(MasterFailingMessage).await;
+        }
+
+        // Wait for the unrecoverable failure and expect a panic
+        let err = pptr.wait_for_unrecoverable_failure().await;
+        panic!("Unrecoverable error encountered: {err:?}");
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_unrecoverable_failure_timeout() {
+        let pptr = Puppeteer::new();
+
+        // Spawn a puppet actor that will not fail
+        let res = pptr.spawn_self(PuppetActor::default()).await;
+        assert!(res.is_ok());
+
+        // Wait for an unrecoverable failure with a timeout
+        let result = tokio::time::timeout(
+            Duration::from_millis(100),
+            pptr.wait_for_unrecoverable_failure(),
+        )
+        .await;
+
+        // Verify that the timeout occurred and no error was encountered
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Unrecoverable error encountered")]
+    async fn test_unrecoverable_error_inside_puppet() {
+        #[derive(Debug, Clone, Default)]
+        struct UnrecoverablePuppet;
+
+        #[derive(Debug)]
+        struct UnrecoverableMessage;
+
+        #[async_trait]
+        impl Lifecycle for UnrecoverablePuppet {
+            type Supervision = OneForAll;
+            async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
+                Err(CriticalError::new(
+                    ctx.pid,
+                    "Failed to reset UnrecoverablePuppet",
+                ))
+            }
+        }
+
+        #[async_trait]
+        impl Handler<UnrecoverableMessage> for UnrecoverablePuppet {
+            type Response = ();
+
+            type Executor = SequentialExecutor;
+
+            async fn handle_message(
+                &mut self,
+                msg: UnrecoverableMessage,
+                ctx: &Context,
+            ) -> Result<Self::Response, PuppetError> {
+                Err(ctx.critical_error("Unrecoverable error"))
+            }
+        }
+
+        let pptr = Puppeteer::new();
+
+        let res = pptr.spawn_self(UnrecoverablePuppet).await;
+        assert!(res.is_ok());
+
+        pptr.send::<UnrecoverablePuppet, _>(UnrecoverableMessage)
+            .await
+            .unwrap();
+
+        let result = pptr.wait_for_unrecoverable_failure().await;
+        panic!("Unrecoverable error encountered: {result:?}");
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Unrecoverable error encountered")]
+    async fn test_unrecoverable_panic_inside_puppet() {
+        #[derive(Debug, Clone, Default)]
+        struct UnrecoverablePuppet;
+
+        #[derive(Debug)]
+        struct UnrecoverableMessage;
+
+        #[async_trait]
+        impl Lifecycle for UnrecoverablePuppet {
+            type Supervision = OneForAll;
+            async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
+                Err(CriticalError::new(
+                    ctx.pid,
+                    "Failed to reset UnrecoverablePuppet",
+                ))
+            }
+        }
+
+        #[async_trait]
+        impl Handler<UnrecoverableMessage> for UnrecoverablePuppet {
+            type Response = ();
+
+            type Executor = SequentialExecutor;
+
+            async fn handle_message(
+                &mut self,
+                msg: UnrecoverableMessage,
+                ctx: &Context,
+            ) -> Result<Self::Response, PuppetError> {
+                panic!("Unrecoverable error");
+            }
+        }
+
+        let pptr = Puppeteer::new();
+
+        let res = pptr.spawn_self(UnrecoverablePuppet).await;
+        assert!(res.is_ok());
+
+        pptr.send::<UnrecoverablePuppet, _>(UnrecoverableMessage)
+            .await
+            .unwrap();
+
+        let result = pptr.wait_for_unrecoverable_failure().await;
+        panic!("Unrecoverable error encountered: {result:?}");
     }
 }
