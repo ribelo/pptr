@@ -16,6 +16,7 @@
 //! ```
 
 use std::{
+    future::Future,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -62,7 +63,6 @@ pub mod strategy {
 /// A trait for implementing supervision strategies.
 ///
 /// Supervision strategies define how to handle failures in a puppet system.
-#[async_trait]
 pub trait SupervisionStrategy: Send + Sync {
     /// Handles a failure in the puppet system.
     ///
@@ -72,10 +72,13 @@ pub trait SupervisionStrategy: Send + Sync {
     /// # Errors
     ///
     /// Returns a `PuppetError` if the failure cannot be handled.
-    async fn handle_failure(pptr: &Puppeteer, master: Pid, puppet: Pid) -> Result<(), PuppetError>;
+    fn handle_failure(
+        pptr: &Puppeteer,
+        master: Pid,
+        puppet: Pid,
+    ) -> impl Future<Output = Result<(), PuppetError>> + Send;
 }
 
-#[async_trait]
 impl SupervisionStrategy for strategy::NoSupervision {
     async fn handle_failure(
         _pptr: &Puppeteer,
@@ -86,7 +89,6 @@ impl SupervisionStrategy for strategy::NoSupervision {
     }
 }
 
-#[async_trait]
 impl SupervisionStrategy for strategy::OneToOne {
     async fn handle_failure(pptr: &Puppeteer, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
         Ok(pptr
@@ -95,7 +97,6 @@ impl SupervisionStrategy for strategy::OneToOne {
     }
 }
 
-#[async_trait]
 impl SupervisionStrategy for strategy::OneForAll {
     async fn handle_failure(
         pptr: &Puppeteer,
@@ -112,7 +113,6 @@ impl SupervisionStrategy for strategy::OneForAll {
     }
 }
 
-#[async_trait]
 impl SupervisionStrategy for strategy::RestForOne {
     async fn handle_failure(pptr: &Puppeteer, master: Pid, puppet: Pid) -> Result<(), PuppetError> {
         if let Some(puppets) = pptr.get_puppets_by_pid(master) {

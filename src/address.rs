@@ -201,7 +201,6 @@ where
 #[cfg(test)]
 mod tests {
     use crate::{prelude::*, puppet::PuppetStatus};
-    use async_trait::async_trait;
     use tokio::time::Duration;
 
     #[derive(Clone, Default)]
@@ -247,7 +246,6 @@ mod tests {
         #[derive(Debug)]
         struct TestMessage;
 
-        #[async_trait]
         impl Handler<TestMessage> for TestAddressPuppet {
             type Response = ();
             type Executor = SequentialExecutor;
@@ -271,7 +269,6 @@ mod tests {
         #[derive(Debug)]
         struct TestMessage;
 
-        #[async_trait]
         impl Handler<TestMessage> for TestAddressPuppet {
             type Response = String;
             type Executor = SequentialExecutor;
@@ -295,7 +292,6 @@ mod tests {
         #[derive(Debug)]
         struct TestMessage;
 
-        #[async_trait]
         impl Handler<TestMessage> for TestAddressPuppet {
             type Response = ();
             type Executor = SequentialExecutor;

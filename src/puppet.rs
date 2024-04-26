@@ -1,7 +1,6 @@
 use std::future::Future;
 
 use async_recursion::async_recursion;
-use async_trait::async_trait;
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{debug, warn};
 
@@ -943,7 +942,6 @@ pub type ResponseFor<P, E> = <P as Handler<E>>::Response;
 /// The `Handler` trait is implemented by puppets to define how they handle specific message types.
 /// It requires the implementation of the `handle_message` method, which processes the received
 /// message and returns a response.
-#[async_trait]
 pub trait Handler<E>: Puppet
 where
     E: Message,
@@ -958,11 +956,11 @@ where
     /// # Errors
     ///
     /// Returns a `PuppetError` if the message handling fails.
-    async fn handle_message(
+    fn handle_message(
         &mut self,
         msg: E,
         ctx: &Context<Self>,
-    ) -> Result<Self::Response, PuppetError>;
+    ) -> impl Future<Output = Result<Self::Response, PuppetError>> + Send;
 }
 
 #[allow(clippy::struct_field_names)]
@@ -989,7 +987,6 @@ mod tests {
     #[derive(Debug, Clone, Default)]
     struct PuppetActor;
 
-    #[async_trait]
     impl Puppet for PuppetActor {
         type Supervision = OneForAll;
     }

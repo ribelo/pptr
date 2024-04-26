@@ -5,7 +5,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
@@ -22,17 +21,16 @@ use crate::{
 /// the message to be handled, and an optional reply address for sending the response back to the sender.
 ///
 /// The trait is generic over the message type `E`, which must implement the `Message` trait.
-#[async_trait]
 pub trait Executor<E>
 where
     E: Message,
 {
-    async fn execute<P>(
+    fn execute<P>(
         puppet: &mut P,
         puppeteer: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
-    ) -> Result<(), PuppetError>
+    ) -> impl Future<Output = Result<(), PuppetError>> + Send
     where
         P: Handler<E>;
 }
@@ -57,7 +55,6 @@ pub struct ConcurrentExecutor;
 /// fine-grained control over the execution environment is required.
 pub struct DedicatedConcurrentExecutor;
 
-#[async_trait]
 impl<E> Executor<E> for SequentialExecutor
 where
     E: Message,
@@ -93,7 +90,6 @@ where
     }
 }
 
-#[async_trait]
 impl<E> Executor<E> for ConcurrentExecutor
 where
     E: Message,
@@ -291,7 +287,6 @@ impl DedicatedExecutor {
     }
 }
 
-#[async_trait]
 impl<E> Executor<E> for DedicatedConcurrentExecutor
 where
     E: Message,

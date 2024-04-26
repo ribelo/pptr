@@ -69,12 +69,10 @@
 //!
 //! ```rust
 //! use pptr::prelude::*;
-//! use async_trait::async_trait;
 //!
 //! #[derive(Debug, Clone, Default)]
 //! struct PingActor;
 //!
-//! #[async_trait]
 //! impl Puppet for PingActor {
 //!     // This actor uses the 'OneForAll' supervision strategy.
 //!     // If any child actor fails, all child actors will be restarted.
@@ -100,7 +98,6 @@
 //! // Additionally, the 'Handler' trait can be implemented multiple times for the same message type,
 //! // allowing different actors to handle the same message type in their own unique way.
 //! // This flexibility enables better separation of concerns and modular design in the actor system.
-//! #[async_trait]
 //! impl Handler<Ping> for PingActor {
 //!
 //!     // The 'Response' associated type specifies the type of the response returned by the handler.
@@ -143,7 +140,6 @@
 //! struct PongActor;
 //!
 //! // By default, similar to 'PingActor', the 'reset' method returns a default instance of 'PongActor'.
-//! #[async_trait]
 //! impl Puppet for PongActor {
 //!     type Supervision = OneForAll;
 //! }
@@ -152,7 +148,6 @@
 //! #[derive(Debug)]
 //! struct Pong(u32);
 //!
-//! #[async_trait]
 //! impl Handler<Pong> for PongActor {
 //!     type Response = ();
 //!     type Executor = SequentialExecutor;

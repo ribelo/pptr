@@ -84,9 +84,9 @@ pub struct Puppeteer {
     pub(crate) master_to_puppets: Arc<Mutex<FxHashMap<Pid, FxIndexSet<Pid>>>>,
     pub(crate) puppet_to_master: Arc<Mutex<FxHashMap<Pid, Pid>>>,
     pub(crate) resources: Arc<Mutex<FxHashMap<Id, Arc<Mutex<BoxedAny>>>>>,
-    pub(crate) executor: DedicatedExecutor,
     pub(crate) failure_tx: Arc<AtomicTake<oneshot::Sender<CriticalError>>>,
     pub(crate) failure_rx: Arc<AtomicTake<oneshot::Receiver<CriticalError>>>,
+    pub(crate) executor: DedicatedExecutor,
 }
 
 impl Default for Puppeteer {
@@ -1368,7 +1368,6 @@ mod tests {
 
     use std::time::Duration;
 
-    use async_trait::async_trait;
     use executor::ConcurrentExecutor;
 
     use crate::{executor::SequentialExecutor, supervision::strategy::OneForAll};
@@ -1416,7 +1415,6 @@ mod tests {
     #[derive(Debug)]
     struct PuppetFailingMessage;
 
-    #[async_trait]
     impl Handler<MasterMessage> for MasterActor {
         type Response = ();
         type Executor = SequentialExecutor;
@@ -1429,7 +1427,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Handler<PuppetMessage> for PuppetActor {
         type Response = ();
         type Executor = SequentialExecutor;
@@ -1442,7 +1439,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Handler<MasterFailingMessage> for MasterActor {
         type Response = ();
         type Executor = SequentialExecutor;
@@ -1464,7 +1460,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl Handler<PuppetFailingMessage> for PuppetActor {
         type Response = ();
         type Executor = SequentialExecutor;
@@ -1771,7 +1766,6 @@ mod tests {
         #[derive(Debug)]
         pub struct IncrementCounter;
 
-        #[async_trait]
         impl Handler<IncrementCounter> for CounterPuppet {
             type Response = i32;
             type Executor = SequentialExecutor;
@@ -1794,7 +1788,6 @@ mod tests {
         #[derive(Debug)]
         pub struct DebugCounterPuppet;
 
-        #[async_trait]
         impl Handler<DebugCounterPuppet> for CounterPuppet {
             type Response = i32;
             type Executor = SequentialExecutor;
@@ -1931,7 +1924,6 @@ mod tests {
             }
         }
 
-        #[async_trait]
         impl Handler<UnrecoverableMessage> for UnrecoverablePuppet {
             type Response = ();
 
@@ -1968,12 +1960,10 @@ mod tests {
         #[derive(Debug)]
         struct SelfSendMessage;
 
-        #[async_trait]
         impl Puppet for SelfSendPuppet {
             type Supervision = OneForAll;
         }
 
-        #[async_trait]
         impl Handler<SelfSendMessage> for SelfSendPuppet {
             type Response = i32;
 
@@ -2013,7 +2003,6 @@ mod tests {
     //     #[derive(Debug)]
     //     struct UnrecoverableMessage;
     //
-    //     #[async_trait]
     //     impl Puppet for UnrecoverablePuppet {
     //         type Supervision = OneForAll;
     //         async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
@@ -2025,7 +2014,6 @@ mod tests {
     //         }
     //     }
     //
-    //     #[async_trait]
     //     impl Handler<UnrecoverableMessage> for UnrecoverablePuppet {
     //         type Response = ();
     //
