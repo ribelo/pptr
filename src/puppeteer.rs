@@ -988,7 +988,7 @@ impl Puppeteer {
             pptr: self.clone(),
         };
 
-        puppet.on_init(&ctx).await?;
+        puppet.on_init(&ctx)?;
         ctx.start(&mut puppet, false).await?;
 
         tokio::spawn(run_puppet_loop(puppet, ctx, handle));
@@ -1384,7 +1384,7 @@ mod tests {
     impl Puppet for MasterActor {
         type Supervision = OneForAll;
 
-        async fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
+        fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
             println!("Resetting MasterActor");
             Err(CriticalError::new(ctx.pid, "Failed to reset MasterActor"))
         }
@@ -1399,7 +1399,7 @@ mod tests {
     impl Puppet for PuppetActor {
         type Supervision = OneForAll;
 
-        async fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
+        fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
             Ok(Self {
                 failures: self.failures,
             })
@@ -1766,7 +1766,7 @@ mod tests {
         #[async_trait]
         impl Puppet for CounterPuppet {
             type Supervision = OneForAll;
-            async fn reset(&self, _ctx: &Context<Self>) -> Result<Self, CriticalError> {
+            fn reset(&self, _ctx: &Context<Self>) -> Result<Self, CriticalError> {
                 Ok(CounterPuppet::default())
             }
         }
@@ -1927,7 +1927,7 @@ mod tests {
         #[async_trait]
         impl Puppet for UnrecoverablePuppet {
             type Supervision = OneForAll;
-            async fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
+            fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
                 Err(CriticalError::new(
                     ctx.pid,
                     "Failed to reset UnrecoverablePuppet",

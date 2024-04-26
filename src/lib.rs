@@ -82,7 +82,7 @@
 //!
 //!     // The 'reset' method is called when the actor needs to reset its state.
 //!     // In this example, we simply return a default instance of 'PingActor'.
-//!     async fn reset(&self, _ctx: &Context<Self>) -> Result<Self, CriticalError> {
+//!     fn reset(&self, _ctx: &Context<Self>) -> Result<Self, CriticalError> {
 //!         Ok(Self::default())
 //!     }
 //! }
