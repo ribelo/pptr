@@ -33,42 +33,6 @@ coerce = "0.8.10"
 crossbeam = { version = "0.8.2", features = ["crossbeam-channel"] }
 parking_lot = "0.12.1"
 
-[[bench]]
-name = "pptr_bench"
-harness = false
-
-[[bench]]
-name = "tokio_bench"
-harness = false
-
-[[bench]]
-name = "actix_bench"
-harness = false
-
-[[bench]]
-name = "vin_bench"
-harness = false
-
-[[bench]]
-name = "ractor_bench"
-harness = false
-
-[[bench]]
-name = "coerce_bench"
-harness = false
-
-[[bench]]
-name = "primitives_bench"
-harness = false
-
-[profile.bench]
-opt-level = 3
-codegen-units = 1
-target-cpu = "native"
-lto = true
-overflow-checks = false
-debug = false
-
 [lints.clippy]
 all = { level = "warn", priority = -2 }
 

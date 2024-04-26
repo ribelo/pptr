@@ -6,7 +6,7 @@ use crate::{
     errors::{PostmanError, PuppetError},
     message::{Message, Postman},
     pid::Pid,
-    puppet::{Handler, Lifecycle, LifecycleStatus, ResponseFor},
+    puppet::{Handler, Puppet, PuppetStatus, ResponseFor},
     puppeteer::Puppeteer,
 };
 
@@ -24,15 +24,15 @@ use crate::{
 #[derive(Clone)]
 pub struct Address<S>
 where
-    S: Lifecycle,
+    S: Puppet,
 {
     pub pid: Pid,
-    pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
+    pub(crate) status_rx: watch::Receiver<PuppetStatus>,
     pub(crate) message_tx: Postman<S>,
     pub(crate) pptr: Puppeteer,
 }
 
-impl<S: Lifecycle> fmt::Debug for Address<S> {
+impl<S: Puppet> fmt::Debug for Address<S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Address")
             .field("pid", &self.pid)
@@ -43,7 +43,7 @@ impl<S: Lifecycle> fmt::Debug for Address<S> {
 
 impl<S> Address<S>
 where
-    S: Lifecycle,
+    S: Puppet,
 {
     /// Returns the current lifecycle status of the puppet.
     ///
@@ -53,7 +53,7 @@ where
     /// let status = address.get_status();
     /// ```
     #[must_use]
-    pub fn get_status(&self) -> LifecycleStatus {
+    pub fn get_status(&self) -> PuppetStatus {
         *self.status_rx.borrow()
     }
 
@@ -67,7 +67,7 @@ where
     /// let status_rx = address.status_subscribe();
     /// ```
     #[must_use]
-    pub fn subscribe_status(&self) -> watch::Receiver<LifecycleStatus> {
+    pub fn subscribe_status(&self) -> watch::Receiver<PuppetStatus> {
         self.status_rx.clone()
     }
 
@@ -85,7 +85,7 @@ where
     /// ```
     pub fn on_status_change<F>(&self, f: F)
     where
-        F: Fn(LifecycleStatus) + Send + 'static,
+        F: Fn(PuppetStatus) + Send + 'static,
     {
         let mut rx = self.subscribe_status();
         tokio::spawn(async move {
@@ -183,7 +183,7 @@ where
     #[allow(clippy::impl_trait_in_params)]
     pub async fn spawn<P>(&self, puppet: P) -> Result<Address<P>, PuppetError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         self.pptr.spawn::<P, S>(puppet).await
     }
@@ -191,7 +191,7 @@ where
 
 impl<P> fmt::Display for Address<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Address({})", self.pid)
@@ -200,14 +200,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::{prelude::*, puppet::LifecycleStatus};
+    use crate::{prelude::*, puppet::PuppetStatus};
     use async_trait::async_trait;
     use tokio::time::Duration;
 
     #[derive(Clone, Default)]
     struct TestAddressPuppet;
 
-    impl Lifecycle for TestAddressPuppet {
+    impl Puppet for TestAddressPuppet {
         type Supervision = OneToOne;
     }
 
@@ -215,7 +215,7 @@ mod tests {
     async fn test_get_status() {
         let pptr = Puppeteer::new();
         let address = pptr.spawn_self(TestAddressPuppet).await.unwrap();
-        assert_eq!(address.get_status(), LifecycleStatus::Active);
+        assert_eq!(address.get_status(), PuppetStatus::Active);
     }
 
     #[tokio::test]
@@ -223,7 +223,7 @@ mod tests {
         let pptr = Puppeteer::new();
         let address = pptr.spawn_self(TestAddressPuppet).await.unwrap();
         let status_rx = address.subscribe_status();
-        assert_eq!(*status_rx.borrow(), LifecycleStatus::Active);
+        assert_eq!(*status_rx.borrow(), PuppetStatus::Active);
     }
 
     #[tokio::test]
@@ -231,15 +231,15 @@ mod tests {
         let pptr = Puppeteer::new();
         let address = pptr.spawn_self(TestAddressPuppet).await.unwrap();
 
-        assert_eq!(address.get_status(), LifecycleStatus::Active);
+        assert_eq!(address.get_status(), PuppetStatus::Active);
 
         let (tx, rx) = std::sync::mpsc::channel();
         address.on_status_change(move |status| tx.send(status).unwrap());
 
-        pptr.set_status_by_pid(address.pid, LifecycleStatus::Inactive);
+        pptr.set_status_by_pid(address.pid, PuppetStatus::Inactive);
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        assert_eq!(rx.recv().unwrap(), LifecycleStatus::Inactive);
+        assert_eq!(rx.recv().unwrap(), PuppetStatus::Inactive);
     }
 
     #[tokio::test]
@@ -255,7 +255,7 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _: TestMessage,
-                _: &Context,
+                _: &Context<Self>,
             ) -> Result<(), PuppetError> {
                 Ok(())
             }
@@ -279,7 +279,7 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _: TestMessage,
-                _: &Context,
+                _: &Context<Self>,
             ) -> Result<String, PuppetError> {
                 Ok("test".to_string())
             }
@@ -303,7 +303,7 @@ mod tests {
             async fn handle_message(
                 &mut self,
                 _: TestMessage,
-                _: &Context,
+                _: &Context<Self>,
             ) -> Result<(), PuppetError> {
                 tokio::time::sleep(Duration::from_secs(2)).await;
                 Ok(())
@@ -329,17 +329,17 @@ mod tests {
         #[derive(Clone, Default)]
         struct ChildPuppet;
 
-        impl Lifecycle for MasterPuppet {
+        impl Puppet for MasterPuppet {
             type Supervision = OneToOne;
         }
 
-        impl Lifecycle for ChildPuppet {
+        impl Puppet for ChildPuppet {
             type Supervision = OneToOne;
         }
 
         let pptr = Puppeteer::new();
         let master_address = pptr.spawn_self(MasterPuppet).await.unwrap();
         let child_address = master_address.spawn(ChildPuppet).await.unwrap();
-        assert_eq!(child_address.get_status(), LifecycleStatus::Active);
+        assert_eq!(child_address.get_status(), PuppetStatus::Active);
     }
 }

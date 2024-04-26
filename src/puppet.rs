@@ -20,7 +20,7 @@ use crate::{
 
 /// A trait that manages the entire lifecycle of puppets (actors) in an actor model.
 ///
-/// The `Lifecycle` trait defines methods for handling the initialization, starting,
+/// The `Puppet` trait defines methods for handling the initialization, starting,
 /// stopping, and resetting of puppets. It also specifies the associated type
 /// `Supervision`, which represents the supervision strategy used for managing the
 /// puppet's lifecycle.
@@ -28,7 +28,7 @@ use crate::{
 /// Implementors of this trait must be `Send`, `Sync`, `Sized`, `Clone`, and `'static`.
 #[allow(unused_variables)]
 #[async_trait]
-pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
+pub trait Puppet: Send + Sync + Sized + Clone + 'static {
     /// The supervision strategy used for managing the puppet's lifecycle.
     type Supervision: SupervisionStrategy;
 
@@ -39,7 +39,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     /// of the puppet on success, or a `CriticalError` if the reset operation fails.
     ///
     /// The default implementation clones the current instance of the puppet.
-    async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
+    async fn reset(&self, ctx: &Context<Self>) -> Result<Self, CriticalError> {
         warn!(puppet = %ctx.pid, "Resetting puppet");
         Ok(self.clone())
     }
@@ -51,7 +51,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation logs a debug message indicating that the puppet is
     /// being initialized.
-    async fn on_init(&mut self, ctx: &Context) -> Result<(), PuppetError> {
+    async fn on_init(&mut self, ctx: &Context<Self>) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Initializing puppet");
         Ok(())
     }
@@ -63,7 +63,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation logs a debug message indicating that the puppet is
     /// being started.
-    async fn on_start(&mut self, ctx: &Context) -> Result<(), PuppetError> {
+    async fn on_start(&mut self, ctx: &Context<Self>) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Starting puppet" );
         Ok(())
     }
@@ -75,7 +75,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation logs a debug message indicating that the puppet is
     /// being stopped.
-    async fn on_stop(&mut self, ctx: &Context) -> Result<(), PuppetError> {
+    async fn on_stop(&mut self, ctx: &Context<Self>) -> Result<(), PuppetError> {
         tracing::debug!(puppet = %ctx.pid, "Stopping puppet");
         Ok(())
     }
@@ -84,18 +84,18 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
 /// A marker trait indicating that a type can be used as a puppet (actor).
 ///
 /// Types implementing this trait must be `Send`, `Sync`, `Clone`, and `'static`.
-pub trait Puppet: Send + Sync + Clone + 'static {}
+pub trait Puppetable: Send + Sync + Clone + 'static {}
 /// Blanket implementation of the `Puppet` trait for types satisfying the necessary bounds.
 ///
 /// This implementation automatically implements the `Puppet` trait for any type that is
 /// `Send`, `Sync`, `Clone`, and `'static`.
-impl<T> Puppet for T where T: Send + Sync + Clone + 'static {}
+impl<T> Puppetable for T where T: Send + Sync + Clone + 'static {}
 
 /// Represents the lifecycle status of a puppet.
 ///
-/// The `LifecycleStatus` enum defines the possible states a puppet can be in during its lifecycle.
+/// The `PuppetStatus` enum defines the possible states a puppet can be in during its lifecycle.
 #[derive(Debug, Clone, Copy, strum::Display, PartialEq, Eq)]
-pub enum LifecycleStatus {
+pub enum PuppetStatus {
     Activating,
     Active,
     Deactivating,
@@ -109,21 +109,23 @@ pub enum LifecycleStatus {
 /// The `Context` struct contains information about a puppet's context, including its process ID (`pid`),
 /// the `Puppeteer` instance, and the retry configuration.
 #[derive(Clone, Debug)]
-pub struct Context {
+pub struct Context<P: Puppet> {
     pub pid: Pid,
     pub(crate) pptr: Puppeteer,
     pub(crate) retry_config: RetryConfig,
+    _phantom: std::marker::PhantomData<P>,
 }
 
-impl Context {
-    pub(crate) fn new<P>(pptr: Puppeteer, retry_config: RetryConfig) -> Self
+impl<T: Puppet> Context<T> {
+    pub(crate) fn new(pptr: Puppeteer, retry_config: RetryConfig) -> Self
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         Self {
-            pid: Pid::new::<P>(),
+            pid: Pid::new::<T>(),
             pptr,
             retry_config,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -140,24 +142,20 @@ impl Context {
     /// # Panics
     ///
     /// This method does not panic.
-    pub(crate) async fn start<P>(
-        &self,
-        puppet: &mut P,
-        is_restarting: bool,
-    ) -> Result<(), PuppetError>
+    pub(crate) async fn start(&self, puppet: &mut T, is_restarting: bool) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         // Determine the service command and initial status based on whether the service is
         // restarting or not.
         let (service_command, begin_status) = if is_restarting {
-            (ServiceCommand::Start, LifecycleStatus::Activating)
+            (ServiceCommand::Start, PuppetStatus::Activating)
         } else {
             (
                 ServiceCommand::Restart {
                     stage: Some(RestartStage::Start),
                 },
-                LifecycleStatus::Restarting,
+                PuppetStatus::Restarting,
             )
         };
 
@@ -178,7 +176,7 @@ impl Context {
                         // If `on_start` succeeds or returns a non-critical error, set the status
                         // to `Active` and mark `on_start_done` as `true`.
                         on_start_done = true;
-                        self.set_status(LifecycleStatus::Active);
+                        self.set_status(PuppetStatus::Active);
                     }
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
@@ -250,20 +248,20 @@ impl Context {
     /// # Panics
     ///
     /// This method does not panic.
-    async fn stop<P>(&self, puppet: &mut P, is_restarting: bool) -> Result<(), PuppetError>
+    async fn stop(&self, puppet: &mut T, is_restarting: bool) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         // Determine the service command and initial status based on whether the service is
         // restarting or not.
         let (service_command, begin_status) = if is_restarting {
-            (ServiceCommand::Start, LifecycleStatus::Activating)
+            (ServiceCommand::Start, PuppetStatus::Activating)
         } else {
             (
                 ServiceCommand::Restart {
                     stage: Some(RestartStage::Start),
                 },
-                LifecycleStatus::Restarting,
+                PuppetStatus::Restarting,
             )
         };
         // Clone the retry config from the supervision config.
@@ -307,7 +305,7 @@ impl Context {
                         // If `on_stop` succeeds or returns a non-critical error, set the status
                         // to `Inactive` and mark `on_stop_done` as `true`.
                         on_stop_done = true;
-                        self.set_status(LifecycleStatus::Inactive);
+                        self.set_status(PuppetStatus::Inactive);
                     }
                     Err(PuppetError::Critical(_)) => {
                         if self.retry_config.increment_retry().is_err() {
@@ -349,9 +347,9 @@ impl Context {
     /// # Panics
     ///
     /// This method does not panic.
-    async fn restart<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
+    async fn restart(&self, puppet: &mut T) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         self.stop(puppet, true).await?;
         // Reset state
@@ -371,15 +369,15 @@ impl Context {
     /// # Panics
     ///
     /// This method does not panic.
-    pub(crate) async fn fail<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
+    pub(crate) async fn fail(&self, puppet: &mut T) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         if let Err(err) = self.fail_all_puppets(puppet).await {
-            self.set_status(LifecycleStatus::Failed);
+            self.set_status(PuppetStatus::Failed);
             Err(err)
         } else {
-            self.set_status(LifecycleStatus::Failed);
+            self.set_status(PuppetStatus::Failed);
             Ok(())
         }
     }
@@ -390,19 +388,19 @@ impl Context {
     #[must_use]
     pub fn is_puppet_exists<P>(&self) -> bool
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         self.pptr.is_puppet_exists::<P>()
     }
 
     /// Retrieves the current status of the puppet of the specified type.
     ///
-    /// Returns the current `LifecycleStatus` of the puppet of type `P`, or `None` if the puppet
+    /// Returns the current `PuppetStatus` of the puppet of type `P`, or `None` if the puppet
     /// does not exist.
     #[must_use]
-    pub fn get_status<P>(&self) -> Option<LifecycleStatus>
+    pub fn get_status<P>(&self) -> Option<PuppetStatus>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let puppet = Pid::new::<P>();
         self.pptr.get_puppet_status_by_pid(puppet)
@@ -411,7 +409,7 @@ impl Context {
     /// Sets the status of the puppet.
     ///
     /// This method updates the status of the puppet to the provided `status`.
-    pub(crate) fn set_status(&self, status: LifecycleStatus) {
+    pub(crate) fn set_status(&self, status: PuppetStatus) {
         self.pptr.set_status_by_pid(self.pid, status);
     }
 
@@ -422,8 +420,8 @@ impl Context {
     #[must_use]
     pub fn has_puppet<M, P>(&self) -> Option<bool>
     where
-        M: Lifecycle,
-        P: Lifecycle,
+        M: Puppet,
+        P: Puppet,
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
@@ -437,7 +435,7 @@ impl Context {
     #[must_use]
     pub fn get_master<P>(&self) -> Option<Pid>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let puppet = Pid::new::<P>();
         self.pptr.get_puppet_master_by_pid(puppet)
@@ -451,8 +449,8 @@ impl Context {
     /// does not have permission to set the puppet's master.
     pub fn set_master<P, M>(&self) -> Result<(), PuppetOperationError>
     where
-        P: Lifecycle,
-        M: Lifecycle,
+        P: Puppet,
+        M: Puppet,
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
@@ -468,7 +466,7 @@ impl Context {
     /// does not have permission to detach the puppet.
     pub fn detach_puppet<P>(&self) -> Result<(), PuppetOperationError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let puppet_pid = Pid::new::<P>();
         self.pptr.detach_puppet_by_pid(self.pid, puppet_pid)
@@ -481,8 +479,8 @@ impl Context {
     #[must_use]
     pub fn has_permission<M, P>(&self) -> Option<bool>
     where
-        M: Lifecycle,
-        P: Lifecycle,
+        M: Puppet,
+        P: Puppet,
     {
         let master_pid = Pid::new::<M>();
         let puppet_pid = Pid::new::<P>();
@@ -497,7 +495,7 @@ impl Context {
     /// Returns a `PuppetError` if the puppet fails to spawn or initialize.
     pub async fn spawn<P>(&self, puppet: P) -> Result<Address<P>, PuppetError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         self.pptr
             .puppet_builder::<P>(puppet)
@@ -531,20 +529,21 @@ impl Context {
     ///
     /// Returns a `PuppetError` if the failure reporting fails or if the puppet's master does not exist.
     #[async_recursion]
-    pub async fn report_failure<P>(
+    pub async fn report_failure(
         &self,
-        puppet: &mut P,
+        puppet: &mut T,
         error: PuppetError,
     ) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
+        dbg!("3");
         if matches!(error, PuppetError::NonCritical(_)) {
             debug!(error = %error, "Non critical error reported");
             return Ok(());
         }
 
-        let Some(master_pid) = self.get_master::<P>() else {
+        let Some(master_pid) = self.get_master::<T>() else {
             return self.fail(puppet).await;
         };
 
@@ -577,16 +576,16 @@ impl Context {
     /// This method handles the provided `PuppetError` reported by a child puppet identified by `pid`.
     /// If the error is non-critical, it is ignored. If the error is critical, it attempts to handle
     /// the failure based on the puppet's supervision strategy.
-    pub async fn handle_child_error<P>(&mut self, puppet: &mut P, pid: Pid, error: PuppetError)
+    pub async fn handle_child_error(&mut self, puppet: &mut T, pid: Pid, error: PuppetError)
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         match error {
             // Do nothing
             PuppetError::NonCritical(_) => {}
             PuppetError::Critical(_) => {
                 if let Err(err) =
-                    <P as Lifecycle>::Supervision::handle_failure(&self.pptr, self.pid, pid).await
+                    <T as Puppet>::Supervision::handle_failure(&self.pptr, self.pid, pid).await
                 {
                     match err {
                         // Do nothing
@@ -667,7 +666,7 @@ impl Context {
         command: ServiceCommand,
     ) -> Result<(), PuppetSendCommandError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         self.send_command_by_pid(Pid::new::<P>(), command).await
     }
@@ -695,13 +694,13 @@ impl Context {
     /// # Errors
     ///
     /// Returns a `PuppetError` if the command handling fails.
-    pub(crate) async fn handle_command<P>(
+    pub(crate) async fn handle_command(
         &mut self,
-        puppet: &mut P,
+        puppet: &mut T,
         cmd: ServiceCommand,
     ) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         match cmd {
             ServiceCommand::Start => Ok(self.start(puppet, false).await?),
@@ -825,9 +824,9 @@ impl Context {
     /// # Errors
     ///
     /// Returns a `PuppetError` if failing any of the associated puppets fails.
-    pub(crate) async fn fail_all_puppets<P>(&self, puppet: &mut P) -> Result<(), PuppetError>
+    pub(crate) async fn fail_all_puppets(&self, puppet: &mut T) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        T: Puppet,
     {
         // Try to fetch the puppets by the given pid.
         if let Some(puppets) = self.pptr.get_puppets_by_pid(self.pid) {
@@ -857,9 +856,9 @@ impl Context {
     /// # Panics
     ///
     /// Panics if the mutex lock fails.
-    pub fn add_resource<T>(&self, resource: T) -> Result<(), ResourceAlreadyExist>
+    pub fn add_resource<X>(&self, resource: X) -> Result<(), ResourceAlreadyExist>
     where
-        T: Send + Sync + Clone + 'static,
+        X: Send + Sync + Clone + 'static,
     {
         self.pptr.add_resource(resource)
     }
@@ -874,11 +873,11 @@ impl Context {
     ///
     /// Panics if the mutex lock fails.
     #[must_use]
-    pub fn get_resource<T>(&self) -> Option<T>
+    pub fn get_resource<X>(&self) -> Option<X>
     where
-        T: Send + Sync + Clone + 'static,
+        X: Send + Sync + Clone + 'static,
     {
-        self.pptr.get_resource::<T>()
+        self.pptr.get_resource::<X>()
     }
 
     /// Borrows the resource of type `T` and passes it to the provided closure `f`.
@@ -891,12 +890,12 @@ impl Context {
     /// # Panics
     ///
     /// Panics if the mutex lock fails.
-    pub fn with_resource<T, F, R>(&self, f: F) -> Option<R>
+    pub fn with_resource<X, F, R>(&self, f: F) -> Option<R>
     where
-        T: Send + Sync + Clone + 'static,
-        F: FnOnce(&T) -> R,
+        X: Send + Sync + Clone + 'static,
+        F: FnOnce(&X) -> R,
     {
-        self.pptr.with_resource::<T, F, R>(f)
+        self.pptr.with_resource::<X, F, R>(f)
     }
 
     /// Mutably borrows the resource of type `T` and passes it to the provided closure `f`.
@@ -909,12 +908,12 @@ impl Context {
     /// # Panics
     ///
     /// Panics if the mutex lock fails.
-    pub fn with_resource_mut<T, F, R>(&self, f: F) -> Option<R>
+    pub fn with_resource_mut<X, F, R>(&self, f: F) -> Option<R>
     where
-        T: Send + Sync + Clone + 'static,
-        F: FnOnce(&mut T) -> R,
+        X: Send + Sync + Clone + 'static,
+        F: FnOnce(&mut X) -> R,
     {
-        self.pptr.with_resource_mut::<T, F, R>(f)
+        self.pptr.with_resource_mut::<X, F, R>(f)
     }
 
     /// Retrieves a cloned copy of the resource of type `T`, or panics if it doesn't exist.
@@ -925,11 +924,11 @@ impl Context {
     ///
     /// Panics if the resource doesn't exist or if the mutex lock fails.
     #[must_use]
-    pub fn expect_resource<T>(&self) -> T
+    pub fn expect_resource<X>(&self) -> X
     where
-        T: Send + Sync + Clone + 'static,
+        X: Send + Sync + Clone + 'static,
     {
-        self.pptr.expect_resource::<T>()
+        self.pptr.expect_resource::<X>()
     }
 
     /// Creates a new non-critical `PuppetError` with the given error message.
@@ -977,7 +976,7 @@ pub type ResponseFor<P, E> = <P as Handler<E>>::Response;
 /// It requires the implementation of the `handle_message` method, which processes the received
 /// message and returns a response.
 #[async_trait]
-pub trait Handler<E>: Lifecycle
+pub trait Handler<E>: Puppet
 where
     E: Message,
 {
@@ -994,7 +993,7 @@ where
     async fn handle_message(
         &mut self,
         msg: E,
-        ctx: &Context,
+        ctx: &Context<Self>,
     ) -> Result<Self::Response, PuppetError>;
 }
 
@@ -1002,9 +1001,9 @@ where
 #[derive(Debug)]
 pub(crate) struct PuppetHandle<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
-    pub(crate) status_rx: watch::Receiver<LifecycleStatus>,
+    pub(crate) status_rx: watch::Receiver<PuppetStatus>,
     pub(crate) message_rx: Mailbox<P>,
     pub(crate) command_rx: ServiceMailbox,
 }
@@ -1015,7 +1014,7 @@ where
 /// It provides methods to set various options such as the message buffer size, command buffer size,
 /// and retry configuration.
 ///
-/// The generic parameter `P` specifies the type of the puppet and must implement the `Lifecycle`
+/// The generic parameter `P` specifies the type of the puppet and must implement the `Puppet`
 /// trait.
 ///
 /// # Fields
@@ -1033,14 +1032,14 @@ where
 /// use pptr::prelude::*;
 ///
 /// #[derive(Debug, Default, Clone)]
-/// struct Puppet;
+/// struct SomePuppet;
 ///
-/// impl Lifecycle for Puppet {
+/// impl Puppet for SomePuppet {
 ///     type Supervision = OneForAll;
 /// }
 ///
 /// let pptr = Puppeteer::new();
-/// let builder = PuppetBuilder::new(Puppet::default(), pptr);
+/// let builder = PuppetBuilder::new(SomePuppet::default(), pptr);
 /// ```
 ///
 /// # Safety
@@ -1050,7 +1049,7 @@ where
 #[derive(Debug)]
 pub struct PuppetBuilder<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     pub pid: Pid,
     pub puppet: Option<P>,
@@ -1062,7 +1061,7 @@ where
 
 impl<P> PuppetBuilder<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     /// Creates a new `PuppetBuilder` with the provided puppet state.
     ///
@@ -1111,7 +1110,7 @@ where
     /// puppet on success, or a `PuppetError` on failure.
     pub async fn spawn(mut self) -> Result<Address<P>, PuppetError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let pptr = self.pptr.take().unwrap();
         pptr.spawn_puppet_by_pid(self, Pid::new::<P>()).await
@@ -1124,8 +1123,8 @@ where
     /// or a `PuppetError` on failure.
     pub async fn spawn_link<M>(mut self) -> Result<Address<P>, PuppetError>
     where
-        P: Lifecycle,
-        M: Lifecycle,
+        P: Puppet,
+        M: Puppet,
     {
         let pptr = self.pptr.take().unwrap();
         pptr.spawn_puppet_by_pid(self, Pid::new::<M>()).await
@@ -1141,7 +1140,7 @@ where
         master_pid: Pid,
     ) -> Result<Address<P>, PuppetError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let pptr = self.pptr.take().unwrap();
         pptr.spawn_puppet_by_pid(self, master_pid).await
@@ -1162,7 +1161,7 @@ mod tests {
     struct PuppetActor;
 
     #[async_trait]
-    impl Lifecycle for PuppetActor {
+    impl Puppet for PuppetActor {
         type Supervision = OneForAll;
     }
 
@@ -1170,9 +1169,9 @@ mod tests {
     async fn test_spawn_task() {
         let pptr = Puppeteer::new();
         let retry_config = RetryConfig::default();
-        let context = Context::new::<PuppetActor>(pptr, retry_config);
+        let context = Context::<PuppetActor>::new(pptr, retry_config);
 
-        let handle = context.spawn_task(|ctx: Context| {
+        let handle = context.spawn_task(|ctx: Context<PuppetActor>| {
             async move {
                 let x = ctx.critical_error("foo");
                 42
@@ -1187,9 +1186,9 @@ mod tests {
     async fn test_spawn_heavy_task() {
         let pptr = Puppeteer::new();
         let retry_config = RetryConfig::default();
-        let context = Context::new::<PuppetActor>(pptr, retry_config);
+        let context = Context::<PuppetActor>::new(pptr, retry_config);
 
-        let handle = context.spawn_task(|ctx: Context| {
+        let handle = context.spawn_task(|ctx: Context<PuppetActor>| {
             async move {
                 let x = ctx.critical_error("foo");
                 42

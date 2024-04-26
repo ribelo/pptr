@@ -29,7 +29,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        Puppeteer: &mut Context,
+        puppeteer: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -64,7 +64,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        ctx: &mut Context,
+        ctx: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -100,7 +100,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        Puppeteer: &mut Context,
+        Puppeteer: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
@@ -298,7 +298,7 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        Puppeteer: &mut Context,
+        Puppeteer: &mut Context<P>,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>

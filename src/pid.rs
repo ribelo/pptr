@@ -17,12 +17,12 @@
 //! use pptr::prelude::*;
 //!
 //! # #[derive(Debug, Clone, Default)]
-//! struct Puppet;
-//! impl Lifecycle for Puppet {
+//! struct SomePuppet;
+//! impl Puppet for SomePuppet {
 //!     type Supervision = OneForAll;
 //! }
 //!
-//! let pid = Pid::new::<Puppet>();
+//! let pid = Pid::new::<SomePuppet>();
 //! println!("Puppet ID: {}", pid);
 //! println!("Puppet Name: {}", pid.name());
 //! ```
@@ -35,7 +35,7 @@ use std::{
 
 use rustc_hash::FxHasher;
 
-use crate::puppet::Lifecycle;
+use crate::puppet::Puppet;
 
 /// A unique hashable ID used to identify puppets and resources.
 ///
@@ -123,7 +123,7 @@ impl Pid {
     /// This function does not panic.
     pub fn new<P>() -> Self
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let id = Id::new::<P>();
         Self {
@@ -201,14 +201,14 @@ mod tests {
     #[derive(Clone, Default)]
     struct FirstPuppet;
 
-    impl Lifecycle for FirstPuppet {
+    impl Puppet for FirstPuppet {
         type Supervision = OneToOne;
     }
 
     #[derive(Clone, Default)]
     struct SecondPuppet;
 
-    impl Lifecycle for SecondPuppet {
+    impl Puppet for SecondPuppet {
         type Supervision = OneToOne;
     }
 

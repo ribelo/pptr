@@ -23,7 +23,7 @@ use crate::{
     executor::Executor,
     pid::Pid,
     prelude::CriticalError,
-    puppet::{Context, Handler, Lifecycle, ResponseFor},
+    puppet::{Context, Handler, Puppet, ResponseFor},
 };
 
 /// A marker trait for types that can be used as messages.
@@ -52,12 +52,12 @@ impl<T> Message for T where T: fmt::Debug + Send + 'static {}
 #[async_trait]
 pub trait Envelope<P>: Send
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     /// Handles the message using the provided puppet and context.
-    async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context);
+    async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context<P>);
     /// Sends an error as a response using the provided context.
-    async fn reply_error(&mut self, ctx: &Context, err: PuppetError);
+    async fn reply_error(&mut self, ctx: &Context<P>, err: PuppetError);
 }
 
 /// A type alias for a one-shot sender used to send a reply.
@@ -136,12 +136,14 @@ where
     P: Handler<E>,
     E: Message + 'static,
 {
-    async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context) {
+    async fn handle_message(&mut self, puppet: &mut P, ctx: &mut Context<P>) {
         if let Some(msg) = self.message.take() {
             let reply_address = self.reply_address.take();
+            dbg!("4");
             if let Err(err) =
                 <P as Handler<E>>::Executor::execute(puppet, ctx, msg, reply_address).await
             {
+                dbg!("5");
                 self.reply_error(ctx, err).await;
             }
         } else {
@@ -149,7 +151,7 @@ where
             self.reply_error(ctx, err).await;
         }
     }
-    async fn reply_error(&mut self, ctx: &Context, err: PuppetError) {
+    async fn reply_error(&mut self, ctx: &Context<P>, err: PuppetError) {
         if let Some(reply_address) = self.reply_address.take() {
             if reply_address.send(Err(err)).is_err() {
                 let err =
@@ -224,10 +226,10 @@ impl ServicePacket {
     pub(crate) async fn handle_command<P>(
         &mut self,
         puppet: &mut P,
-        ctx: &mut Context,
+        ctx: &mut Context<P>,
     ) -> Result<(), PuppetError>
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         let cmd = self
             .cmd
@@ -292,14 +294,14 @@ pub enum ServiceCommand {
 #[derive(Debug)]
 pub struct Postman<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>,
 }
 
 impl<P> Clone for Postman<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     fn clone(&self) -> Self {
         Self {
@@ -310,7 +312,7 @@ where
 
 impl<P> Postman<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     #[must_use]
     pub fn new(tx: tokio::sync::mpsc::Sender<Box<dyn Envelope<P>>>) -> Self {
@@ -436,14 +438,14 @@ impl ServicePostman {
 
 pub(crate) struct Mailbox<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     rx: mpsc::Receiver<Box<dyn Envelope<P>>>,
 }
 
 impl<P> fmt::Debug for Mailbox<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Mailbox").field("rx", &self.rx).finish()
@@ -452,7 +454,7 @@ where
 
 impl<P> Mailbox<P>
 where
-    P: Lifecycle,
+    P: Puppet,
 {
     pub fn new(rx: mpsc::Receiver<Box<dyn Envelope<P>>>) -> Self {
         Self { rx }

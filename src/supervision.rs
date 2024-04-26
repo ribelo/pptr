@@ -21,7 +21,6 @@ use std::{
 };
 
 use async_trait::async_trait;
-
 use crate::{
     errors::{PuppetError, RetryError},
     message::ServiceCommand,

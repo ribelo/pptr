@@ -75,14 +75,14 @@
 //! struct PingActor;
 //!
 //! #[async_trait]
-//! impl Lifecycle for PingActor {
+//! impl Puppet for PingActor {
 //!     // This actor uses the 'OneForAll' supervision strategy.
 //!     // If any child actor fails, all child actors will be restarted.
 //!     type Supervision = OneForAll;
 //!
 //!     // The 'reset' method is called when the actor needs to reset its state.
 //!     // In this example, we simply return a default instance of 'PingActor'.
-//!     async fn reset(&self, _ctx: &Context) -> Result<Self, CriticalError> {
+//!     async fn reset(&self, _ctx: &Context<Self>) -> Result<Self, CriticalError> {
 //!         Ok(Self::default())
 //!     }
 //! }
@@ -118,7 +118,7 @@
 //!     // The 'handle_message' method is called when the actor receives a 'Ping' message.
 //!     // It prints the received counter value and sends a 'Pong' message to 'PongActor'
 //!     // with an incremented counter value, until the counter reaches 10.
-//!     async fn handle_message(&mut self, msg: Ping, ctx: &Context) -> Result<Self::Response, PuppetError> {
+//!     async fn handle_message(&mut self, msg: Ping, ctx: &Context<Self>) -> Result<Self::Response, PuppetError> {
 //!         // The 'ctx' parameter is a reference to the 'Context' struct, which encapsulates
 //!         // the actor's execution context and provides access to the same methods as the 'pptr' instance.
 //!         // It allows the actor to send messages, spawn new actors, and perform other actions.
@@ -144,7 +144,7 @@
 //!
 //! // By default, similar to 'PingActor', the 'reset' method returns a default instance of 'PongActor'.
 //! #[async_trait]
-//! impl Lifecycle for PongActor {
+//! impl Puppet for PongActor {
 //!     type Supervision = OneForAll;
 //! }
 //!
@@ -160,7 +160,7 @@
 //!     // The 'handle_message' method for 'PongActor' is similar to 'PingActor'.
 //!     // It prints the received counter value and sends a 'Ping' message back to 'PingActor'
 //!     // with an incremented counter value, until the counter reaches 10.
-//!     async fn handle_message(&mut self, msg: Pong, ctx: &Context) -> Result<Self::Response, PuppetError> {
+//!     async fn handle_message(&mut self, msg: Pong, ctx: &Context<Self>) -> Result<Self::Response, PuppetError> {
 //!         println!("Pong received: {}", msg.0);
 //!
 //!         if msg.0 < 10 {
@@ -217,9 +217,9 @@ pub mod prelude {
     pub use crate::pid::Pid;
     pub use crate::puppet::Context;
     pub use crate::puppet::Handler;
-    pub use crate::puppet::Lifecycle;
     pub use crate::puppet::Puppet;
     pub use crate::puppet::PuppetBuilder;
+    pub use crate::puppet::Puppetable;
     pub use crate::puppeteer::Puppeteer;
     pub use crate::supervision::strategy::*;
 }

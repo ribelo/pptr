@@ -212,7 +212,7 @@ use pptr::prelude::*;
 struct PingActor;
 
 #[async_trait]
-impl Lifecycle for PingActor {
+impl Puppet for PingActor {
     // This actor uses the 'OneForAll' supervision strategy.
     // If any child actor fails, all child actors will be restarted.
     type Supervision = OneForAll;
@@ -281,7 +281,7 @@ struct PongActor;
 
 // By default, similar to 'PingActor', the 'reset' method returns a default instance of 'PongActor'.
 #[async_trait]
-impl Lifecycle for PongActor {
+impl Puppet for PongActor {
     type Supervision = OneForAll;
 }
 

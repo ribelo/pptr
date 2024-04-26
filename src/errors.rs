@@ -30,7 +30,7 @@ use thiserror::Error;
 
 use crate::{
     pid::{Id, Pid},
-    puppet::{Lifecycle, LifecycleStatus},
+    puppet::{Puppet, PuppetStatus},
 };
 
 /// Error returned when a referenced puppet does not exist.
@@ -53,11 +53,11 @@ impl PuppetDoesNotExistError {
     /// # use pptr::pid::Pid;
     /// # use pptr::errors::PuppetDoesNotExistError;
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let pid = Pid::new::<Puppet>();
+    /// let pid = Pid::new::<SomePuppet>();
     /// let err = PuppetDoesNotExistError::new(pid);
     /// ```
     ///
@@ -79,11 +79,11 @@ impl PuppetDoesNotExistError {
     /// ```
     /// # use pptr::errors::PuppetDoesNotExistError;
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let err = PuppetDoesNotExistError::from_type::<Puppet>();
+    /// let err = PuppetDoesNotExistError::from_type::<SomePuppet>();
     /// ```
     ///
     /// # Panics
@@ -92,7 +92,7 @@ impl PuppetDoesNotExistError {
     #[must_use]
     pub fn from_type<P>() -> Self
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         Self::new(Pid::new::<P>())
     }
@@ -164,11 +164,11 @@ impl PuppetAlreadyExist {
     /// # use pptr::pid::Pid;
     /// # use pptr::errors::PuppetAlreadyExist;
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let pid = Pid::new::<Puppet>();
+    /// let pid = Pid::new::<SomePuppet>();
     /// let err = PuppetAlreadyExist::new(pid);
     /// ```
     ///
@@ -190,11 +190,11 @@ impl PuppetAlreadyExist {
     /// ```
     /// # use pptr::errors::PuppetAlreadyExist;
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let err = PuppetAlreadyExist::from_type::<Puppet>();
+    /// let err = PuppetAlreadyExist::from_type::<SomePuppet>();
     /// ```
     ///
     /// # Panics
@@ -203,7 +203,7 @@ impl PuppetAlreadyExist {
     #[must_use]
     pub fn from_type<P>() -> Self
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         Self::new(Pid::new::<P>())
     }
@@ -221,17 +221,17 @@ impl PuppetAlreadyExist {
 /// # use pptr::pid::Pid;
 /// #
 /// # #[derive(Debug, Clone, Default)]
-/// # struct Puppet;
-/// # impl pptr::puppet::Lifecycle for Puppet {
+/// # struct SomePuppet;
+/// # impl pptr::puppet::Puppet for SomePuppet {
 /// #     type Supervision = pptr::supervision::strategy::OneToOne;
 /// # }
 /// #
 /// # #[derive(Debug, Clone, Default)]
 /// # struct Master;
-/// # impl pptr::puppet::Lifecycle for Master {
+/// # impl pptr::puppet::Puppet for Master {
 /// #     type Supervision = pptr::supervision::strategy::OneToOne;
 /// # }
-/// let master_pid = Pid::new::<Puppet>();
+/// let master_pid = Pid::new::<SomePuppet>();
 /// let puppet_pid = Pid::new::<Master>();
 /// let error = PermissionDeniedError {
 ///     master: master_pid,
@@ -269,18 +269,18 @@ impl PermissionDeniedError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
-    /// # impl pptr::puppet::Lifecycle for Master {
+    /// # impl pptr::puppet::Puppet for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// let master_pid = Pid::new::<Master>();
-    /// let puppet_pid = Pid::new::<Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
     /// let error = PermissionDeniedError::new(master_pid, puppet_pid);
     /// ```
     ///
@@ -303,19 +303,19 @@ impl PermissionDeniedError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
-    /// # impl pptr::puppet::Lifecycle for Master {
+    /// # impl pptr::puppet::Puppet for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// let master_pid = Pid::new::<Master>();
-    /// let puppet_pid = Pid::new::<Puppet>();
-    /// let error = PermissionDeniedError::from_type::<Master, Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
+    /// let error = PermissionDeniedError::from_type::<Master, SomePuppet>();
     /// ```
     ///
     /// # Panics
@@ -324,8 +324,8 @@ impl PermissionDeniedError {
     #[must_use]
     pub fn from_type<P, M>() -> Self
     where
-        P: Lifecycle,
-        M: Lifecycle,
+        P: Puppet,
+        M: Puppet,
     {
         Self::new(Pid::new::<M>(), Pid::new::<P>())
     }
@@ -339,18 +339,18 @@ impl PermissionDeniedError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
-    /// # impl pptr::puppet::Lifecycle for Master {
+    /// # impl pptr::puppet::Puppet for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// let master_pid = Pid::new::<Master>();
-    /// let puppet_pid = Pid::new::<Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
     /// let error = PermissionDeniedError::new(master_pid, puppet_pid)
     ///     .with_message("Operation not allowed");
     /// ```
@@ -373,18 +373,18 @@ impl PermissionDeniedError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct Master;
-    /// # impl pptr::puppet::Lifecycle for Master {
+    /// # impl pptr::puppet::Puppet for Master {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// let master_pid = Pid::new::<Master>();
-    /// let puppet_pid = Pid::new::<Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
     /// let error = PermissionDeniedError::new(master_pid, puppet_pid);
     /// assert_eq!(error.message_or_default(), "No message");
     /// ```
@@ -414,7 +414,7 @@ impl From<PermissionDeniedError> for PuppetError {
 #[error("Puppet {puppet} cannot handle message. Status: {status}.")]
 pub struct PuppetCannotHandleMessage {
     pub puppet: Pid,
-    pub status: LifecycleStatus,
+    pub status: PuppetStatus,
 }
 
 impl From<PuppetCannotHandleMessage> for PuppetError {
@@ -431,15 +431,15 @@ impl PuppetCannotHandleMessage {
     /// ```
     /// # use pptr::errors::PuppetCannotHandleMessage;
     /// # use pptr::pid::Pid;
-    /// # use pptr::puppet::LifecycleStatus;
+    /// # use pptr::puppet::PuppetStatus;
     /// #
     /// # #[derive(Debug, Clone, Default)]
     /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # impl pptr::puppet::Puppet for Puppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// let puppet_pid = Pid::new::<Puppet>();
-    /// let status = LifecycleStatus::Inactive;
+    /// let status = PuppetStatus::Inactive;
     /// let error = PuppetCannotHandleMessage::new(puppet_pid, status);
     /// ```
     ///
@@ -447,7 +447,7 @@ impl PuppetCannotHandleMessage {
     ///
     /// This function does not panic.
     #[must_use]
-    pub fn new(puppet: Pid, status: LifecycleStatus) -> Self {
+    pub fn new(puppet: Pid, status: PuppetStatus) -> Self {
         Self { puppet, status }
     }
     /// Creates a new `PuppetCannotHandleMessage` error using the generic type `P` to infer the puppet PID.
@@ -457,24 +457,24 @@ impl PuppetCannotHandleMessage {
     /// ```
     /// # use pptr::errors::PuppetCannotHandleMessage;
     /// # use pptr::pid::Pid;
-    /// # use pptr::puppet::LifecycleStatus;
+    /// # use pptr::puppet::PuppetStatus;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
-    /// let status = LifecycleStatus::Inactive;
-    /// let error = PuppetCannotHandleMessage::from_type::<Puppet>(status);
+    /// let status = PuppetStatus::Inactive;
+    /// let error = PuppetCannotHandleMessage::from_type::<SomePuppet>(status);
     /// ```
     ///
     /// # Panics
     ///
     /// This function does not panic.
     #[must_use]
-    pub fn from_type<P>(status: LifecycleStatus) -> Self
+    pub fn from_type<P>(status: PuppetStatus) -> Self
     where
-        P: Lifecycle,
+        P: Puppet,
     {
         Self::new(Pid::new::<P>(), status)
     }
@@ -514,12 +514,12 @@ impl CriticalError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     ///
-    /// let puppet_pid = Pid::new::<Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
     /// let error = CriticalError::new(puppet_pid, "Something went wrong");
     /// ```
     ///
@@ -564,12 +564,12 @@ impl PuppetError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
-    /// let puppet_pid = Pid::new::<Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
     /// let error = PuppetError::non_critical(puppet_pid, "Something went wrong");
     /// assert!(matches!(error, PuppetError::NonCritical(NonCriticalError { .. })));
     /// ```
@@ -596,12 +596,12 @@ impl PuppetError {
     /// # use pptr::pid::Pid;
     /// #
     /// # #[derive(Debug, Clone, Default)]
-    /// # struct Puppet;
-    /// # impl pptr::puppet::Lifecycle for Puppet {
+    /// # struct SomePuppet;
+    /// # impl pptr::puppet::Puppet for SomePuppet {
     /// #     type Supervision = pptr::supervision::strategy::OneToOne;
     /// # }
     /// #
-    /// let puppet_pid = Pid::new::<Puppet>();
+    /// let puppet_pid = Pid::new::<SomePuppet>();
     /// let error = PuppetError::critical(puppet_pid, "Something went wrong");
     /// assert!(matches!(error, PuppetError::Critical(CriticalError { .. })));
     /// ```
