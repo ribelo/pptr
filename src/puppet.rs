@@ -3,7 +3,7 @@ use std::{future::Future, num::NonZeroUsize};
 use async_recursion::async_recursion;
 use async_trait::async_trait;
 use tokio::{sync::watch, task::JoinHandle};
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     address::Address,
@@ -40,6 +40,7 @@ pub trait Lifecycle: Send + Sync + Sized + Clone + 'static {
     ///
     /// The default implementation clones the current instance of the puppet.
     async fn reset(&self, ctx: &Context) -> Result<Self, CriticalError> {
+        warn!(puppet = %ctx.pid, "Resetting puppet");
         Ok(self.clone())
     }
 

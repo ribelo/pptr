@@ -64,21 +64,21 @@ where
 {
     async fn execute<P>(
         puppet: &mut P,
-        Puppeteer: &mut Context,
+        ctx: &mut Context,
         msg: E,
         reply_address: Option<oneshot::Sender<Result<<P as Handler<E>>::Response, PuppetError>>>,
     ) -> Result<(), PuppetError>
     where
         P: Handler<E>,
     {
-        let pid = Puppeteer.pid;
-        let response = puppet.handle_message(msg, Puppeteer).await;
+        let pid = ctx.pid;
+        let response = puppet.handle_message(msg, ctx).await;
         if let Err(err) = &response {
-            Puppeteer.report_failure(puppet, err.clone()).await?;
+            ctx.report_failure(puppet, err.clone()).await?;
         }
         if let Some(reply_address) = reply_address {
             if reply_address.send(response).is_err() {
-                return Puppeteer
+                return ctx
                     .report_failure(
                         puppet,
                         PuppetError::critical(
